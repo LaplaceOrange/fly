@@ -270,7 +270,14 @@ function DashboardApp() {
         </section>
       </main>
 
-      <footer><span>中国人能飞 · 所有时间均按 {config?.timezone ?? 'Asia/Shanghai'} 展示</span><a href="https://www.cpoauth.com/about" target="_blank" rel="noreferrer">身份认证由 CPOAuth 提供</a></footer>
+      <footer>
+        <span>中国人能飞 · 所有时间均按 {config?.timezone ?? 'Asia/Shanghai'} 展示</span>
+        <span className="footer-links">
+          <span>作者：FSY / LaplaceOrange</span>
+          <a href="https://github.com/LaplaceOrange/fly" target="_blank" rel="noreferrer">GitHub 仓库</a>
+          <a href="https://www.cpoauth.com/about" target="_blank" rel="noreferrer">身份认证由 CPOAuth 提供</a>
+        </span>
+      </footer>
       {turnstileOpen && config && <TurnstileModal siteKey={config.turnstileSiteKey} onClose={() => setTurnstileOpen(false)} onVerify={verifyTakeoff} />}
       {shareOpen && config && dashboard && me.authenticated && <ShareModal user={me.user} dashboard={dashboard} range={range} ttlHours={config.shareTTLHours} onClose={() => setShareOpen(false)} />}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
