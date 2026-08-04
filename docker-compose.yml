@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    env_file: .env
+    environment:
+      LISTEN_ADDR: :8080
+      DATABASE_PATH: /var/lib/chinese-can-fly/fly.db
+      TRUSTED_PROXY_CIDRS: 172.16.0.0/12
+    volumes:
+      - fly_data:/var/lib/chinese-can-fly
+    restart: unless-stopped
+    networks: [internal]
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    restart: unless-stopped
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  fly_data:
+  caddy_data:
+  caddy_config:

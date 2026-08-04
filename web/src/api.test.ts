@@ -1,0 +1,33 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from './api'
+
+describe('share API', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('never sends the URL-fragment AES key to the server', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      id: 'share-id',
+      url: 'https://example.com/share/share-id',
+      expiresAt: '2026-08-11T00:00:00Z',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await api.createShare({
+      encrypted: true,
+      payload: 'ciphertext',
+      iv: 'iv',
+      signature: 'signature',
+      keyId: 'key-id',
+      fragmentKey: 'must-stay-in-the-url-fragment',
+    } as Parameters<typeof api.createShare>[0] & { fragmentKey: string })
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit
+    expect(JSON.parse(request.body as string)).toEqual({
+      encrypted: true,
+      payload: 'ciphertext',
+      iv: 'iv',
+      signature: 'signature',
+      keyId: 'key-id',
+    })
+    expect(request.body).not.toContain('must-stay-in-the-url-fragment')
+  })
+})

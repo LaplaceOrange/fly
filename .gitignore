@@ -1,0 +1,13 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+/data/
+/bin/
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+coverage/
+.cache/
+.playwright-cli/
+*.log
