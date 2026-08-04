@@ -4,7 +4,8 @@ WORKDIR /src/web
 ARG NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --registry=${NPM_REGISTRY} --no-audit --no-fund
-COPY web/ ./
+COPY . /src
+WORKDIR /src/web
 RUN npm run build
 
 FROM golang:1.23-bookworm AS go-builder

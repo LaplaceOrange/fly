@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/sync-audio.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sync-audio.mjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run"
@@ -25,4 +27,3 @@
     "vitest": "^3.1.3"
   }
 }
-

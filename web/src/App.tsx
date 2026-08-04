@@ -6,6 +6,7 @@ import { Heatmap } from './components/Heatmap'
 import { Leaderboard } from './components/Leaderboard'
 import { ShareModal } from './components/ShareModal'
 import { SharePage } from './components/SharePage'
+import { TakeoffSuccessModal } from './components/TakeoffSuccessModal'
 import { TrendChart } from './components/TrendChart'
 import { TurnstileModal } from './components/TurnstileModal'
 import { UserTable } from './components/UserTable'
@@ -37,7 +38,7 @@ function DashboardApp() {
   const [realtime, setRealtime] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [turnstileOpen, setTurnstileOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
-  const [toast, setToast] = useState('')
+  const [takeoffSuccessOpen, setTakeoffSuccessOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
   const refreshTimer = useRef<number | undefined>(undefined)
 
@@ -162,8 +163,7 @@ function DashboardApp() {
     try {
       const result = await api.takeoff(token)
       setTurnstileOpen(false)
-      setToast('起飞成功！全站已经收到这条消息。')
-      window.setTimeout(() => setToast(''), 3600)
+      setTakeoffSuccessOpen(true)
       setMe((current) => current.authenticated ? { ...current, canTakeoff: false, nextAllowedAt: result.nextAllowedAt } : current)
       await refresh()
     } catch (caught) {
@@ -280,7 +280,7 @@ function DashboardApp() {
       </footer>
       {turnstileOpen && config && <TurnstileModal siteKey={config.turnstileSiteKey} onClose={() => setTurnstileOpen(false)} onVerify={verifyTakeoff} />}
       {shareOpen && config && dashboard && me.authenticated && <ShareModal user={me.user} dashboard={dashboard} range={range} ttlHours={config.shareTTLHours} onClose={() => setShareOpen(false)} />}
-      {toast && <div className="toast" role="status">✓ {toast}</div>}
+      {takeoffSuccessOpen && <TakeoffSuccessModal onClose={() => setTakeoffSuccessOpen(false)} />}
     </div>
   )
 }
