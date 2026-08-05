@@ -68,7 +68,7 @@ export function TurnstileModal({ siteKey, onClose, onVerify }: {
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !submitting && onClose()}>
       <section className="modal" role="dialog" aria-modal="true" aria-labelledby="turnstile-title">
         <button className="modal-close" aria-label="关闭" onClick={onClose} disabled={submitting}>×</button>
-        <span className="modal-icon">↗</span>
+        <span className="modal-icon">✈</span>
         <h2 id="turnstile-title">准备起飞</h2>
         <p>完成 Cloudflare 人机验证后，这次起飞会立即展示给所有人。</p>
         <iframe

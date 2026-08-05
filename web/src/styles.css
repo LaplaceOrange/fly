@@ -142,7 +142,7 @@ tbody tr:hover { background: rgba(239,242,237,.7); }
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 20px 0 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .footer-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 16px; }
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(15,22,16,.68); backdrop-filter: blur(7px); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; overflow-y: auto; background: rgba(15,22,16,.68); backdrop-filter: blur(7px); }
 .modal { position: relative; width: min(430px, 100%); padding: 34px; border-radius: 20px; background: var(--surface-solid); box-shadow: 0 30px 80px rgba(0,0,0,.3); text-align: center; }
 .modal-close { position: absolute; right: 13px; top: 11px; border: 0; background: transparent; color: var(--muted); font-size: 26px; }
 .modal-icon { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 15px; border-radius: 18px; background: var(--accent); color: white; font-size: 29px; }
@@ -162,7 +162,7 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .takeoff-audio-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; margin: 0 0 18px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(239,242,237,.65); color: var(--muted); font-size: 10px; }
 .takeoff-audio-state i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .takeoff-audio-state--playing { color: var(--green); }.takeoff-audio-state--playing i { animation: pulse 1s infinite; }
-.share-modal { width: min(500px, 100%); }
+.share-modal { width: min(500px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .message-field { display: grid; gap: 7px; margin-top: 20px; text-align: left; }
 .message-field > span { font-size: 11px; font-weight: 700; }
 .message-field textarea { resize: vertical; width: 100%; border: 1px solid var(--line); background: #f8faf6; border-radius: 10px; padding: 11px; color: var(--ink); font: inherit; font-size: 12px; line-height: 1.6; outline: none; }
@@ -267,6 +267,7 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
   footer { flex-direction: column; }
   .footer-links { justify-content: flex-start; }
   .modal { padding: 30px 18px; }
+  .share-modal { max-height: calc(100dvh - 24px); }
   .shared-stats { grid-template-columns: 1fr; }
 }
 

@@ -235,7 +235,7 @@ function DashboardApp() {
             <p>记录每一次起飞，让全站共同见证。数据持续更新，排行榜绝不落地。</p>
             <div className="hero-actions">
               <button className="takeoff-button" onClick={handleTakeoff} disabled={me.authenticated && !me.canTakeoff && cooldownSeconds > 0}>
-                <span>立即起飞！</span><i>↗</i>
+                <span>立即起飞！</span><i>✈</i>
               </button>
               <button className="share-button" onClick={handleShare}>分享状态 <span>⌁</span></button>
               {me.authenticated && cooldownSeconds > 0
@@ -245,7 +245,7 @@ function DashboardApp() {
           </div>
           <div className="hero-visual" aria-hidden="true">
             <div className="orbit orbit--one" /><div className="orbit orbit--two" />
-            <span className="plane">↗</span>
+            <span className="plane">✈</span>
             <div className="altitude"><small>当前总起飞</small><strong>{dashboard?.summary.totalFlights.toLocaleString() ?? 0}</strong><span>次</span></div>
           </div>
         </section>
@@ -256,7 +256,7 @@ function DashboardApp() {
 
         <section className="stats-grid">
           <StatCard label="全站累计起飞" value={dashboard?.summary.totalFlights ?? 0} detail="历史总次数" symbol="∑" />
-          <StatCard label="当前范围起飞" value={dashboard?.summary.rangeFlights ?? 0} detail={ranges.find((item) => item.value === range)?.label ?? ''} symbol="↗" accent />
+          <StatCard label="当前范围起飞" value={dashboard?.summary.rangeFlights ?? 0} detail={ranges.find((item) => item.value === range)?.label ?? ''} symbol="✈" accent />
           <StatCard label="本站用户" value={dashboard?.summary.totalUsers ?? 0} detail="通过 CPOAuth 登录" symbol="人" />
           <StatCard label="活跃飞行员" value={dashboard?.summary.activeUsers ?? 0} detail="当前范围内起飞" symbol="◎" />
           <StatCard label="最近一次起飞" value={dashboard?.summary.lastFlightAt ? relativeShort(dashboard.summary.lastFlightAt) : '暂无'} detail={dashboard?.summary.lastFlightAt ? formatDate(dashboard.summary.lastFlightAt) : '等待首飞'} symbol="◷" compact />

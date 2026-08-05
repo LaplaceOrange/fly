@@ -53,7 +53,7 @@ export function TakeoffSuccessModal({ onClose }: { onClose: () => void }) {
     <div className="modal-backdrop takeoff-success-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && close()}>
       <section className="modal takeoff-success-modal" role="dialog" aria-modal="true" aria-labelledby="takeoff-success-title">
         <button className="modal-close" aria-label="关闭弹窗并停止音频" onClick={close}>×</button>
-        <div className="takeoff-success-orbit" aria-hidden="true"><span>↗</span></div>
+        <div className="takeoff-success-orbit" aria-hidden="true"><span>✈</span></div>
         <span className="eyebrow">FLIGHT CONFIRMED</span>
         <h2 id="takeoff-success-title">起飞成功！</h2>
         <p>这次起飞已经记录，并实时同步给所有在线用户。</p>
