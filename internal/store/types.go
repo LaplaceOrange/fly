@@ -5,7 +5,12 @@ import (
 	"time"
 )
 
-var ErrDeviceKeyLimit = errors.New("device key limit exceeded")
+var (
+	ErrDeviceKeyLimit = errors.New("device key limit exceeded")
+	ErrPrekeyLimit    = errors.New("prekey limit exceeded")
+	ErrKeyRevoked     = errors.New("device key revoked")
+	ErrPrekeyClaim    = errors.New("prekey claim invalid or expired")
+)
 
 type User struct {
 	ID           string     `json:"id"`
@@ -75,25 +80,60 @@ type RateLimitError struct {
 }
 
 type SigningKey struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"-"`
-	Algorithm   string    `json:"algorithm"`
-	PublicJWK   string    `json:"publicJwk"`
-	Fingerprint string    `json:"fingerprint"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"-"`
+	Algorithm   string     `json:"algorithm"`
+	PublicJWK   string     `json:"publicJwk"`
+	Fingerprint string     `json:"fingerprint"`
+	DeviceLabel string     `json:"deviceLabel,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	LastSeenAt  time.Time  `json:"lastSeenAt"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
 }
 
 type ExchangeKey struct {
-	ID                 string    `json:"id"`
-	UserID             string    `json:"-"`
-	PublicJWK          string    `json:"publicJwk"`
-	Fingerprint        string    `json:"fingerprint"`
-	SigningKeyID       string    `json:"signingKeyId"`
-	BindingVersion     int       `json:"bindingVersion"`
-	BindingSignature   string    `json:"bindingSignature"`
-	SigningPublicJWK   string    `json:"signingPublicJwk,omitempty"`
-	SigningFingerprint string    `json:"signingFingerprint,omitempty"`
-	CreatedAt          time.Time `json:"createdAt"`
+	ID                 string     `json:"id"`
+	UserID             string     `json:"-"`
+	PublicJWK          string     `json:"publicJwk"`
+	Fingerprint        string     `json:"fingerprint"`
+	SigningKeyID       string     `json:"signingKeyId"`
+	BindingVersion     int        `json:"bindingVersion"`
+	BindingSignature   string     `json:"bindingSignature"`
+	SigningPublicJWK   string     `json:"signingPublicJwk,omitempty"`
+	SigningFingerprint string     `json:"signingFingerprint,omitempty"`
+	DeviceLabel        string     `json:"deviceLabel,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	LastSeenAt         time.Time  `json:"lastSeenAt"`
+	RevokedAt          *time.Time `json:"revokedAt,omitempty"`
+}
+
+type OneTimePrekey struct {
+	ID                  string    `json:"keyId"`
+	UserID              string    `json:"-"`
+	ExchangeKeyID       string    `json:"exchangeKeyId"`
+	SigningKeyID        string    `json:"signingKeyId"`
+	PublicJWK           string    `json:"-"`
+	Fingerprint         string    `json:"fingerprint"`
+	BindingVersion      int       `json:"bindingVersion"`
+	BindingSignature    string    `json:"bindingSignature"`
+	ExchangePublicJWK   string    `json:"-"`
+	ExchangeFingerprint string    `json:"exchangeFingerprint"`
+	ExchangeBinding     string    `json:"exchangeBindingSignature"`
+	SigningPublicJWK    string    `json:"-"`
+	SigningFingerprint  string    `json:"signingFingerprint"`
+	DeviceLabel         string    `json:"deviceLabel,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+}
+
+type Device struct {
+	ExchangeKeyID       string     `json:"exchangeKeyId"`
+	SigningKeyID        string     `json:"signingKeyId"`
+	DeviceLabel         string     `json:"deviceLabel"`
+	ExchangeFingerprint string     `json:"exchangeFingerprint"`
+	SigningFingerprint  string     `json:"signingFingerprint"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	LastSeenAt          time.Time  `json:"lastSeenAt"`
+	RevokedAt           *time.Time `json:"revokedAt,omitempty"`
 }
 
 type ShareRecipient struct {
@@ -114,6 +154,7 @@ type Share struct {
 	KeyEnvelopes       string    `json:"keyEnvelopes,omitempty"`
 	CreatedAt          time.Time `json:"createdAt"`
 	ExpiresAt          time.Time `json:"expiresAt"`
+	SignedExpiresAt    string    `json:"-"`
 	Signer             User      `json:"signer"`
 	KeyID              string    `json:"keyId"`
 	SigningAlgorithm   string    `json:"signingAlgorithm"`

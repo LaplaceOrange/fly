@@ -99,6 +99,8 @@ func (s *Server) routes() http.Handler {
 		api.Get("/shares/{shareID}", s.getShare)
 		api.Get("/share-recipients", s.shareRecipients)
 		api.Get("/share-recipients/{userID}/keys", s.recipientExchangeKeys)
+		api.Get("/prekeys", s.prekeyStatus)
+		api.Get("/devices", s.devices)
 		api.Route("/auth", func(auth chi.Router) {
 			auth.Get("/login", s.authLogin)
 			auth.Get("/callback", s.authCallback)
@@ -107,6 +109,9 @@ func (s *Server) routes() http.Handler {
 		api.With(s.sameOrigin).Post("/flights", s.createFlight)
 		api.With(s.sameOrigin).Post("/keys", s.registerSigningKey)
 		api.With(s.sameOrigin).Post("/exchange-keys", s.registerExchangeKey)
+		api.With(s.sameOrigin).Post("/prekeys", s.registerPrekeys)
+		api.With(s.sameOrigin).Post("/share-recipients/{userID}/prekeys/claim", s.claimRecipientPrekeys)
+		api.With(s.sameOrigin).Post("/devices/{exchangeKeyID}/revoke", s.revokeDevice)
 		api.With(s.sameOrigin).Post("/shares", s.createShare)
 	})
 	router.NotFound(s.serveFrontend)
@@ -315,10 +320,18 @@ func (s *Server) isTrustedProxy(address netip.Addr) bool {
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		if r.URL.Path == "/turnstile-frame.html" {
+			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		} else {
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss: https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		if r.URL.Path == "/turnstile-frame.html" {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'unsafe-inline'; connect-src https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+		} else {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		}
 		if s.cfg.PublicBaseURL.Scheme == "https" {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}

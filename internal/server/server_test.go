@@ -173,12 +173,13 @@ func TestSignedShareHTTPFlow(t *testing.T) {
 	if err := json.NewDecoder(keyResponse.Body).Decode(&registered); err != nil {
 		t.Fatal(err)
 	}
-	payload := `{"version":1,"message":"signed"}`
-	shareToSign := shareRequest{Encrypted: false, Payload: payload, SignatureVersion: 2, CryptoSuite: publicCryptoSuite}
+	payload := `{"version":1,"sharedAt":"2026-01-01T00:00:00Z","message":"signed","user":{"id":"share-user","username":"sharer","displayName":"Sharer","avatarUrl":"","totalFlights":0,"lastFlightAt":null},"snapshot":{"totalFlights":0,"totalUsers":1,"rangeFlights":0,"range":"24h"}}`
+	expiresAt := now.Add(30 * time.Minute).Format(time.RFC3339Nano)
+	shareToSign := shareRequest{Encrypted: false, Payload: payload, SenderUserID: user.ID, SignatureVersion: 3, CryptoSuite: publicCryptoSuite, ExpiresAt: expiresAt}
 	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(modernShareSigningInput(shareToSign))))
 	shareResponse := authenticatedJSON(t, testServer.URL+"/api/shares", sessionToken, map[string]any{
 		"encrypted": false, "payload": payload, "iv": "", "signature": signature, "keyId": registered.KeyID,
-		"signatureVersion": 2, "cryptoSuite": publicCryptoSuite, "recipientUserId": "", "keyEnvelopes": []any{},
+		"senderUserId": user.ID, "signatureVersion": 3, "cryptoSuite": publicCryptoSuite, "recipientUserId": "", "keyEnvelopes": []any{}, "expiresAt": expiresAt,
 	})
 	defer shareResponse.Body.Close()
 	if shareResponse.StatusCode != http.StatusCreated {
@@ -277,6 +278,22 @@ func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
 	if err := json.NewDecoder(exchangeResponse.Body).Decode(&exchangeRegistered); err != nil {
 		t.Fatal(err)
 	}
+	prekeyPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prekeyJWK := okpPublicJWK{Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(prekeyPrivate.PublicKey().Bytes())}
+	prekeySignature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(recipientSigningPrivate,
+		[]byte(prekeyBindingInput(recipient.ID, recipientSigningRegistered.KeyID, exchangeRegistered.KeyID, prekeyJWK))))
+	prekeyResponse := authenticatedJSON(t, testServer.URL+"/api/prekeys", "recipient-session", map[string]any{"prekeys": []any{map[string]any{
+		"publicJwk": prekeyJWK, "exchangeKeyId": exchangeRegistered.KeyID, "signingKeyId": recipientSigningRegistered.KeyID,
+		"bindingVersion": 1, "bindingSignature": prekeySignature,
+	}}})
+	defer prekeyResponse.Body.Close()
+	if prekeyResponse.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(prekeyResponse.Body)
+		t.Fatalf("prekey registration returned %d: %s", prekeyResponse.StatusCode, body)
+	}
 	directoryResponse := authenticatedGet(t, testServer.URL+"/api/share-recipients/"+recipient.ID+"/keys", "sender-session")
 	defer directoryResponse.Body.Close()
 	var directory struct {
@@ -298,6 +315,34 @@ func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
 		directory.Keys[0].SigningFingerprint == "" {
 		t.Fatalf("unexpected exchange key directory response: status=%d body=%+v", directoryResponse.StatusCode, directory)
 	}
+	claimResponse := authenticatedJSON(t, testServer.URL+"/api/share-recipients/"+recipient.ID+"/prekeys/claim", "sender-session", map[string]any{})
+	defer claimResponse.Body.Close()
+	var claim struct {
+		ClaimToken string `json:"claimToken"`
+		Keys       []struct {
+			KeyID string `json:"keyId"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(claimResponse.Body).Decode(&claim); err != nil {
+		t.Fatal(err)
+	}
+	if claimResponse.StatusCode != http.StatusOK || claim.ClaimToken == "" || len(claim.Keys) != 1 {
+		t.Fatalf("unexpected prekey claim: status=%d body=%+v", claimResponse.StatusCode, claim)
+	}
+	secondClaimResponse := authenticatedJSON(t, testServer.URL+"/api/share-recipients/"+recipient.ID+"/prekeys/claim", "sender-session", map[string]any{})
+	defer secondClaimResponse.Body.Close()
+	var secondClaim struct {
+		ClaimToken string `json:"claimToken"`
+		Keys       []struct {
+			KeyID string `json:"keyId"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(secondClaimResponse.Body).Decode(&secondClaim); err != nil {
+		t.Fatal(err)
+	}
+	if secondClaimResponse.StatusCode != http.StatusOK || secondClaim.ClaimToken != claim.ClaimToken || len(secondClaim.Keys) != 1 || secondClaim.Keys[0].KeyID != claim.Keys[0].KeyID {
+		t.Fatalf("prekey claim was not idempotent: first=%+v second=%+v", claim, secondClaim)
+	}
 	ephemeralPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -307,16 +352,19 @@ func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
 		Payload:            base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
 		IV:                 base64.RawURLEncoding.EncodeToString(make([]byte, 12)),
 		KeyID:              signingRegistered.KeyID,
-		SignatureVersion:   2,
+		SenderUserID:       sender.ID,
+		SignatureVersion:   3,
 		CryptoSuite:        encryptedCryptoSuite,
 		RecipientUserID:    recipient.ID,
 		EphemeralPublicJWK: okpPublicJWK{Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(ephemeralPrivate.PublicKey().Bytes())},
 		KeyEnvelopes: []keyEnvelope{{
-			KeyID:      exchangeRegistered.KeyID,
+			KeyID:      claim.Keys[0].KeyID,
 			Salt:       base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
 			IV:         base64.RawURLEncoding.EncodeToString(make([]byte, 12)),
 			WrappedKey: base64.RawURLEncoding.EncodeToString(make([]byte, 48)),
 		}},
+		ExpiresAt:        now.Add(30 * time.Minute).Format(time.RFC3339Nano),
+		PrekeyClaimToken: claim.ClaimToken,
 	}
 	request.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(signingPrivate, []byte(modernShareSigningInput(request))))
 	createdResponse := authenticatedJSON(t, testServer.URL+"/api/shares", "sender-session", request)
@@ -330,6 +378,12 @@ func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
 	}
 	if err := json.NewDecoder(createdResponse.Body).Decode(&created); err != nil {
 		t.Fatal(err)
+	}
+	replayResponse := authenticatedJSON(t, testServer.URL+"/api/shares", "sender-session", request)
+	defer replayResponse.Body.Close()
+	if replayResponse.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(replayResponse.Body)
+		t.Fatalf("consumed one-time prekey replay returned %d: %s", replayResponse.StatusCode, body)
 	}
 	if response, err := http.Get(testServer.URL + "/api/shares/" + created.ID); err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous encrypted share fetch = %v, %v", response, err)

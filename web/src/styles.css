@@ -42,6 +42,7 @@ a { color: inherit; }
 .account > span { display: grid; }
 .account strong { font-size: 13px; }
 .account button { padding: 0; border: 0; background: none; color: var(--muted); text-align: left; font-size: 11px; }
+.account-links { display: flex; gap: 8px; }.account-links button:hover { color: var(--accent); }
 .text-button { border: 1px solid var(--line); background: var(--surface-solid); border-radius: 9px; padding: 9px 14px; color: var(--ink); font-weight: 600; }
 .hero { min-height: 420px; display: grid; grid-template-columns: 1.15fr .85fr; align-items: center; border-bottom: 1px solid var(--line); overflow: hidden; }
 .hero-copy { padding: 64px 0; position: relative; z-index: 2; }
@@ -146,7 +147,7 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .modal-close { position: absolute; right: 13px; top: 11px; border: 0; background: transparent; color: var(--muted); font-size: 26px; }
 .modal-icon { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 15px; border-radius: 18px; background: var(--accent); color: white; font-size: 29px; }
 .modal h2 { margin: 0; font-size: 23px; }.modal > p { color: var(--muted); font-size: 12px; line-height: 1.6; }
-.turnstile-box { min-height: 70px; display: grid; place-items: center; margin-top: 20px; }
+.turnstile-frame { width: 100%; height: 82px; display: block; margin-top: 20px; border: 0; background: transparent; }
 .modal-status { color: var(--green) !important; font-weight: 600; }
 .modal-icon--share { background: var(--ink); }
 .takeoff-success-backdrop { background: rgba(8, 25, 14, .78); }
@@ -174,6 +175,10 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .key-fingerprints { display: grid; gap: 3px; padding: 9px 10px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); overflow-wrap: anywhere; }
 .key-fingerprints strong { color: var(--ink); font-size: 10px; }
 .key-fingerprints small { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
+.trust-check { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf6; }
+.trust-check strong { font-size: 10px; }.trust-check small { color: var(--muted); line-height: 1.6; }.trust-check code { overflow-wrap: anywhere; color: var(--ink); }
+.trust-check button { border: 1px solid var(--ink); border-radius: 8px; padding: 8px 10px; background: var(--ink); color: white; font-size: 9px; font-weight: 700; }
+.trust-check--changed { border-color: rgba(237,84,45,.45); background: rgba(237,84,45,.06); }.trust-check--trusted { border-color: rgba(41,168,102,.35); background: #edf5ef; }
 .encryption-toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px; margin-top: 12px; border: 1px solid var(--line); background: #f8faf6; border-radius: 11px; text-align: left; }
 .encryption-toggle > span { display: grid; gap: 3px; }.encryption-toggle strong { font-size: 11px; }.encryption-toggle small { color: var(--muted); font-size: 9px; }
 .encryption-toggle input { width: 38px; height: 21px; accent-color: var(--accent); }
@@ -185,6 +190,12 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .share-link input { min-width: 0; border: 0; padding: 10px; background: #f6f8f4; color: var(--ink); font-size: 10px; outline: none; }
 .share-link button { border: 0; border-left: 1px solid var(--line); padding: 0 14px; background: var(--surface-solid); color: var(--accent-dark); font-weight: 700; font-size: 10px; }
 .signature-valid { margin-top: 12px; color: var(--green); font-size: 9px; }
+.device-modal { width: min(620px, 100%); text-align: left; }.device-modal > .modal-icon, .device-modal > h2, .device-modal > p { text-align: center; }.device-modal > .modal-icon { margin-left: auto; margin-right: auto; }
+.device-list { display: grid; gap: 9px; max-height: min(55vh, 480px); margin-top: 18px; overflow: auto; }
+.device-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #f8faf6; }
+.device-item > div { min-width: 0; display: grid; gap: 3px; }.device-item strong { font-size: 12px; }.device-item strong small { margin-left: 5px; color: var(--green); }.device-item span, .device-item time { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; overflow-wrap: anywhere; }
+.device-item--revoked { opacity: .62; }.revoked-pill { padding: 5px 8px; border-radius: 99px; background: #e5e8e3; white-space: nowrap; }
+.danger-button { flex: none; border: 1px solid rgba(190,54,38,.35); border-radius: 8px; padding: 8px 10px; background: transparent; color: #aa3929; font-size: 9px; font-weight: 700; }.danger-button--confirm { background: #aa3929; color: white; }.danger-button:disabled { opacity: .5; }
 .share-page { min-height: 100vh; padding: 0 24px; }
 .share-page-header { width: min(1050px, 100%); height: 84px; margin: 0 auto; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
 .share-stage { min-height: calc(100vh - 84px); display: grid; place-content: center; justify-items: center; padding: 48px 0 80px; }
@@ -204,6 +215,7 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .decrypt-panel { padding: 30px 0 12px; text-align: center; }
 .lock-icon { display: grid; place-items: center; margin: 0 auto 14px; width: 55px; height: 55px; border-radius: 16px; background: #edf1eb; color: var(--accent); font-size: 27px; }
 .decrypt-panel h1 { font-size: 24px; }.decrypt-panel p { width: min(450px, 100%); margin: 0 auto; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.signer-trust-panel code { display: block; margin: 16px auto 0; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #f6f8f4; color: var(--ink); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .crypto-proof { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 25px; padding-top: 14px; border-top: 1px solid var(--line); }
 .crypto-proof span { border-radius: 5px; padding: 4px 7px; background: #eef1ec; color: var(--muted); font-family: ui-monospace, monospace; font-size: 8px; }
 .back-link { margin-top: 22px; color: var(--muted); font-size: 10px; text-decoration: none; }.back-link:hover { color: var(--accent); }
@@ -233,7 +245,7 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
   .app-shell { padding: 0 18px; }
   .site-header { height: 74px; }
   .live-state { display: none; }
-  .account > span { display: none; }
+  .account > span > strong { display: none; }
   .hero { grid-template-columns: 1fr; min-height: auto; }
   .hero-copy { padding: 55px 0 20px; }
   .hero-visual { min-height: 240px; }

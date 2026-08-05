@@ -18,6 +18,7 @@ type Store struct {
 	db       *sql.DB
 	location *time.Location
 	flightMu sync.Mutex
+	keyMu    sync.Mutex
 }
 
 func Open(path string, location *time.Location) (*Store, error) {
@@ -84,7 +85,10 @@ CREATE TABLE IF NOT EXISTS user_keys (
   algorithm TEXT NOT NULL DEFAULT 'ECDSA-P256-SHA256',
   public_jwk TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  device_label TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  revoked_at INTEGER,
   UNIQUE(user_id, fingerprint)
 );
 CREATE TABLE IF NOT EXISTS user_exchange_keys (
@@ -95,7 +99,28 @@ CREATE TABLE IF NOT EXISTS user_exchange_keys (
   signing_key_id TEXT NOT NULL DEFAULT '',
   binding_version INTEGER NOT NULL DEFAULT 0,
   binding_signature TEXT NOT NULL DEFAULT '',
+  device_label TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  revoked_at INTEGER,
+  UNIQUE(user_id, fingerprint)
+);
+CREATE TABLE IF NOT EXISTS user_prekeys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  exchange_key_id TEXT NOT NULL REFERENCES user_exchange_keys(id) ON DELETE CASCADE,
+  signing_key_id TEXT NOT NULL REFERENCES user_keys(id) ON DELETE CASCADE,
+  public_jwk TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  binding_version INTEGER NOT NULL,
+  binding_signature TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  claimed_by_user_id TEXT NOT NULL DEFAULT '',
+  claim_token TEXT NOT NULL DEFAULT '',
+  claim_token_hash TEXT NOT NULL DEFAULT '',
+  claim_expires_at INTEGER,
+  used_at INTEGER,
+  retain_until INTEGER,
   UNIQUE(user_id, fingerprint)
 );
 CREATE TABLE IF NOT EXISTS shares (
@@ -111,6 +136,7 @@ CREATE TABLE IF NOT EXISTS shares (
   recipient_user_id TEXT NOT NULL DEFAULT '',
   ephemeral_public_jwk TEXT NOT NULL DEFAULT '',
   key_envelopes TEXT NOT NULL DEFAULT '[]',
+  signed_expires_at TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
@@ -121,6 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_users_total ON users(total_flights DESC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_last_flight ON users(last_flight_at DESC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at);
 CREATE INDEX IF NOT EXISTS idx_exchange_keys_user ON user_exchange_keys(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prekeys_available ON user_prekeys(user_id, exchange_key_id, used_at, claim_expires_at, created_at);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
@@ -131,21 +158,34 @@ CREATE INDEX IF NOT EXISTS idx_exchange_keys_user ON user_exchange_keys(user_id,
 		definition string
 	}{
 		{"user_keys", "algorithm", "TEXT NOT NULL DEFAULT 'ECDSA-P256-SHA256'"},
+		{"user_keys", "device_label", "TEXT NOT NULL DEFAULT ''"},
+		{"user_keys", "last_seen_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"user_keys", "revoked_at", "INTEGER"},
 		{"user_exchange_keys", "signing_key_id", "TEXT NOT NULL DEFAULT ''"},
 		{"user_exchange_keys", "binding_version", "INTEGER NOT NULL DEFAULT 0"},
 		{"user_exchange_keys", "binding_signature", "TEXT NOT NULL DEFAULT ''"},
+		{"user_exchange_keys", "device_label", "TEXT NOT NULL DEFAULT ''"},
+		{"user_exchange_keys", "last_seen_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"user_exchange_keys", "revoked_at", "INTEGER"},
 		{"shares", "signature_version", "INTEGER NOT NULL DEFAULT 1"},
 		{"shares", "crypto_suite", "TEXT NOT NULL DEFAULT 'legacy-aes-256-gcm+ecdsa-p256-sha256'"},
 		{"shares", "recipient_user_id", "TEXT NOT NULL DEFAULT ''"},
 		{"shares", "ephemeral_public_jwk", "TEXT NOT NULL DEFAULT ''"},
 		{"shares", "key_envelopes", "TEXT NOT NULL DEFAULT '[]'"},
+		{"shares", "signed_expires_at", "TEXT NOT NULL DEFAULT ''"},
+		{"user_prekeys", "claim_token", "TEXT NOT NULL DEFAULT ''"},
+		{"user_prekeys", "retain_until", "INTEGER"},
 	}
 	for _, column := range columns {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
 			return err
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_shares_recipient ON shares(recipient_user_id, expires_at)`)
+	_, err := s.db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_shares_recipient ON shares(recipient_user_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_prekeys_available ON user_prekeys(user_id, exchange_key_id, used_at, claim_expires_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_exchange_keys_active ON user_exchange_keys(user_id, revoked_at, created_at DESC);
+`)
 	return err
 }
 
@@ -186,6 +226,9 @@ func (s *Store) CleanupExpiredSessions(ctx context.Context, interval time.Durati
 		}
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM shares WHERE expires_at <= ?`, now); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Warn("share cleanup failed", "error", err)
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM user_prekeys WHERE used_at IS NOT NULL AND retain_until <= ?`, now); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("prekey cleanup failed", "error", err)
 		}
 	}
 	cleanup()

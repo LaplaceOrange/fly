@@ -76,7 +76,7 @@ func TestSessionAndSharePersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	share := Share{ID: "share-1", Encrypted: true, Payload: "ciphertext", IV: "iv", Signature: "signature", KeyID: key.ID, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
-	if err := db.CreateShare(ctx, share, user.ID); err != nil {
+	if err := db.CreateShare(ctx, share, user.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	loadedShare, err := db.Share(ctx, share.ID, now)
@@ -115,10 +115,18 @@ func TestExchangeKeysRecipientsAndModernEnvelopePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.RegisterExchangeKey(ctx, ExchangeKey{
+	exchange, err := db.RegisterExchangeKey(ctx, ExchangeKey{
 		ID: "x-key", UserID: recipient.ID, PublicJWK: `{"kty":"OKP","crv":"X25519","x":"x"}`,
 		Fingerprint: "x-fingerprint", SigningKeyID: recipientSigning.ID, BindingVersion: 1,
 		BindingSignature: "binding-signature", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RegisterPrekey(ctx, OneTimePrekey{
+		ID: "prekey", UserID: recipient.ID, ExchangeKeyID: exchange.ID, SigningKeyID: recipientSigning.ID,
+		PublicJWK: `{"kty":"OKP","crv":"X25519","x":"prekey"}`, Fingerprint: "prekey-fingerprint",
+		BindingVersion: 1, BindingSignature: "prekey-binding", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +144,7 @@ func TestExchangeKeysRecipientsAndModernEnvelopePersistence(t *testing.T) {
 		RecipientUserID: recipient.ID, EphemeralPublicJWK: `{"kty":"OKP"}`, KeyEnvelopes: `[{"keyId":"x-key"}]`,
 		KeyID: signing.ID, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
-	if err := db.CreateShare(ctx, share, sender.ID); err != nil {
+	if err := db.CreateShare(ctx, share, sender.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := db.Share(ctx, share.ID, now)
@@ -145,6 +153,16 @@ func TestExchangeKeysRecipientsAndModernEnvelopePersistence(t *testing.T) {
 	}
 	if loaded.SignatureVersion != 2 || loaded.RecipientUserID != recipient.ID || loaded.SigningAlgorithm != "Ed25519" || loaded.KeyEnvelopes != share.KeyEnvelopes {
 		t.Fatalf("unexpected modern share: %+v", loaded)
+	}
+	if err := db.RevokeDevice(ctx, recipient.ID, exchange.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err := db.ExchangeKeys(ctx, recipient.ID); err != nil || len(keys) != 0 {
+		t.Fatalf("revoked exchange key remained active: %+v (%v)", keys, err)
+	}
+	devices, err := db.Devices(ctx, recipient.ID)
+	if err != nil || len(devices) != 1 || devices[0].RevokedAt == nil {
+		t.Fatalf("unexpected revoked device list: %+v (%v)", devices, err)
 	}
 }
 
@@ -155,6 +173,12 @@ func TestExchangeKeyDeviceLimit(t *testing.T) {
 	now := time.Now().UTC()
 	user, err := db.UpsertUser(ctx, User{ID: "key-limit-user", Username: "keys", DisplayName: "Keys"}, now)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RegisterSigningKey(ctx, SigningKey{
+		ID: "signing-key", UserID: user.ID, Algorithm: "Ed25519", PublicJWK: `{"kty":"OKP"}`,
+		Fingerprint: "signing-fingerprint", CreatedAt: now,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for index := 0; index < 32; index++ {

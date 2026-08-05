@@ -14,7 +14,8 @@ func TestVerifyModernShareSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := shareRequest{
-		Encrypted: false, Payload: `{"version":1}`, SignatureVersion: 2, CryptoSuite: publicCryptoSuite,
+		Encrypted: false, Payload: `{"version":1}`, SenderUserID: "sender", SignatureVersion: 3, CryptoSuite: publicCryptoSuite,
+		ExpiresAt: "2026-01-01T00:00:00Z",
 	}
 	request.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(modernShareSigningInput(request))))
 	if !verifyModernShareSignature(publicKey, request) {
@@ -28,8 +29,8 @@ func TestVerifyModernShareSignature(t *testing.T) {
 
 func TestModernShareSigningInputCanonicalFormat(t *testing.T) {
 	t.Parallel()
-	request := shareRequest{Encrypted: false, Payload: `起飞`, SignatureVersion: 2, CryptoSuite: publicCryptoSuite}
-	want := "share-sign-v2\n7:Ed25519\n5:false\n6:起飞\n0:\n0:\n0:\n1:0\n"
+	request := shareRequest{Encrypted: false, Payload: `起飞`, SenderUserID: "sender", SignatureVersion: 3, CryptoSuite: publicCryptoSuite, ExpiresAt: "2026-01-01T00:00:00Z"}
+	want := "share-sign-v3\n1:3\n6:sender\n7:Ed25519\n5:false\n6:起飞\n0:\n0:\n0:\n20:2026-01-01T00:00:00Z\n1:0\n"
 	if got := modernShareSigningInput(request); got != want {
 		t.Fatalf("canonical input mismatch\nwant: %q\n got: %q", want, got)
 	}

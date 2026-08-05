@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { decryptLegacyAESGCM, decryptModernShare, verifyShare } from '../crypto'
-import { APIError, type SharePayload, type ShareRecord } from '../types'
+import { decryptLegacyAESGCM, decryptModernShare, inspectShareSigner, parseSharePayload, trustShareSignerIdentity, verifyShare } from '../crypto'
+import { APIError, type RecipientTrustInspection, type SharePayload, type ShareRecord } from '../types'
 import { Avatar } from './Avatar'
 
 export function SharePage({ id }: { id: string }) {
   const [record, setRecord] = useState<ShareRecord>()
   const [payload, setPayload] = useState<SharePayload>()
   const [signatureValid, setSignatureValid] = useState<boolean>()
+  const [signerTrust, setSignerTrust] = useState<RecipientTrustInspection>()
   const [legacyKey, setLegacyKey] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('key') ?? '')
   const [authRequired, setAuthRequired] = useState(false)
   const [error, setError] = useState('')
@@ -22,15 +23,14 @@ export function SharePage({ id }: { id: string }) {
       if (!active) return
       setSignatureValid(valid)
       if (!valid) throw new Error('分享签名无效，内容可能已被篡改')
-      if (!share.encrypted) {
-        setPayload(JSON.parse(share.payload) as SharePayload)
-      } else if (share.signatureVersion >= 2) {
-        const me = await api.me()
-        if (!me.authenticated) throw new Error('请登录接收者账号后解密此分享')
-        setPayload(JSON.parse(await decryptModernShare(me.user.id, share)) as SharePayload)
-      } else if (legacyKey) {
-        setPayload(JSON.parse(await decryptLegacyAESGCM(share.payload, share.iv, legacyKey)) as SharePayload)
+      if (share.signingAlgorithm === 'Ed25519' && share.publicJwk.kty === 'OKP') {
+        const inspection = await inspectShareSigner(share.signer.id, share.publicJwk, share.fingerprint)
+        if (!active) return
+        setSignerTrust(inspection)
+        if (inspection.status !== 'trusted') return
       }
+      const decoded = await decodeShare(share, legacyKey)
+      if (active && decoded) setPayload(decoded)
     }).catch((caught) => {
       if (!active) return
       if (caught instanceof APIError && caught.status === 401) {
@@ -42,12 +42,28 @@ export function SharePage({ id }: { id: string }) {
     return () => { active = false }
   }, [id])
 
+  const trustSigner = async () => {
+    if (!record || !signerTrust) return
+    setLoading(true)
+    setError('')
+    try {
+      await trustShareSignerIdentity(record.signer.id, signerTrust)
+      setSignerTrust({ ...signerTrust, status: 'trusted' })
+      const decoded = await decodeShare(record, legacyKey)
+      if (decoded) setPayload(decoded)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '无法打开分享')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const decryptLegacy = async () => {
     if (!record || !legacyKey) return
     setError('')
     try {
       const plaintext = await decryptLegacyAESGCM(record.payload, record.iv, legacyKey.trim())
-      setPayload(JSON.parse(plaintext) as SharePayload)
+      setPayload(parseSharePayload(plaintext, record.signer.id))
       window.history.replaceState({}, '', `${window.location.pathname}#key=${legacyKey.trim()}`)
     } catch {
       setError('解密失败：密钥不正确或密文已损坏')
@@ -67,15 +83,23 @@ export function SharePage({ id }: { id: string }) {
         <section className="share-card-public">
           <div className="share-card-top">
             <span className="eyebrow">SIGNED FLIGHT SHARE</span>
-            {signatureValid === true && <span className="verified-pill">✓ 签名有效</span>}
+            {signatureValid === true && <span className="verified-pill">✓ {signerTrust?.status === 'trusted' || record?.signingAlgorithm !== 'Ed25519' ? '签名有效' : '签名待核对'}</span>}
             {signatureValid === false && <span className="invalid-pill">签名无效</span>}
           </div>
           {record && <div className="share-signer"><Avatar user={record.signer} size={50} /><div><small>分享者</small><strong>{record.signer.displayName}</strong><span>@{record.signer.username}</span></div></div>}
-          {authRequired ? (
+          {record && signerTrust && signerTrust.status !== 'trusted' ? (
+            <div className="decrypt-panel signer-trust-panel">
+              <span className="lock-icon">◇</span>
+              <h1>{signerTrust.status === 'changed' ? '分享者签名密钥发生变化' : '首次验证该分享者'}</h1>
+              <p>Ed25519 签名在数学上有效，但请先通过独立渠道与分享者核对安全码，确认服务器没有替换身份公钥。</p>
+              <code>{signerTrust.safetyNumber}</code>
+              <button className="primary-modal-button" onClick={trustSigner}>我已核对，信任此签名密钥</button>
+            </div>
+          ) : authRequired ? (
             <div className="decrypt-panel">
               <span className="lock-icon">◇</span>
               <h1>请验证接收者身份</h1>
-              <p>这是指定接收者的端到端加密分享。登录对应的 CPOAuth 账号后，浏览器会使用本设备 X25519 私钥自动解密。</p>
+              <p>这是指定接收者的端到端加密分享。登录对应的 CPOAuth 账号后，浏览器会使用本设备的一次性 X25519 私钥自动解密。</p>
               <button className="primary-modal-button" onClick={login}>登录并解密</button>
             </div>
           ) : record?.encrypted && !payload ? (
@@ -83,7 +107,7 @@ export function SharePage({ id }: { id: string }) {
               <div className="decrypt-panel">
                 <span className="lock-icon">◇</span>
                 <h1>端到端加密分享</h1>
-                <p>系统已验证接收者身份，但此设备需要拥有分享创建时对应的 X25519 私钥。设备私钥不会上传服务器。</p>
+                <p>系统已验证接收者身份，但此设备需要拥有分享创建时对应的一次性 X25519 私钥。设备私钥不会上传服务器。</p>
               </div>
             ) : (
               <div className="decrypt-panel">
@@ -105,7 +129,7 @@ export function SharePage({ id }: { id: string }) {
             </div>
           ) : null}
           {record && <div className="crypto-proof">
-            <span>{record.encrypted ? (record.signatureVersion >= 2 ? 'X25519 + AES-256-GCM' : '旧版 AES-256-GCM') : '公开内容'}</span>
+            <span>{record.encrypted ? (record.signatureVersion === 3 ? '一次性 X25519 + AES-256-GCM' : record.signatureVersion === 2 ? 'X25519 + AES-256-GCM（兼容）' : '旧版 AES-256-GCM') : '公开内容'}</span>
             <span>{record.signingAlgorithm === 'Ed25519' ? 'Ed25519' : '旧版 ECDSA P-256'}</span>
             <span title={record.fingerprint}>密钥指纹 {record.fingerprint.slice(0, 12)}…</span>
           </div>}
@@ -115,6 +139,17 @@ export function SharePage({ id }: { id: string }) {
       </main>
     </div>
   )
+}
+
+async function decodeShare(share: ShareRecord, legacyKey: string) {
+  if (!share.encrypted) return parseSharePayload(share.payload, share.signer.id)
+  if (share.signatureVersion >= 2) {
+    const me = await api.me()
+    if (!me.authenticated) throw new Error('请登录接收者账号后解密此分享')
+    return parseSharePayload(await decryptModernShare(me.user.id, share), share.signer.id)
+  }
+  if (legacyKey) return parseSharePayload(await decryptLegacyAESGCM(share.payload, share.iv, legacyKey), share.signer.id)
+  return undefined
 }
 
 function formatDate(value: string) {

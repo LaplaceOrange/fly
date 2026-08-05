@@ -100,6 +100,39 @@ export interface ExchangeKey {
   signingFingerprint: string
 }
 
+export interface OneTimePrekey {
+  keyId: string
+  publicJwk: OKPPublicJWK
+  fingerprint: string
+  exchangeKeyId: string
+  exchangePublicJwk: OKPPublicJWK
+  exchangeFingerprint: string
+  exchangeBindingSignature: string
+  signingKeyId: string
+  signingPublicJwk: OKPPublicJWK
+  signingFingerprint: string
+  bindingVersion: 1
+  bindingSignature: string
+  deviceLabel: string
+}
+
+export interface DeviceKeyInfo {
+  exchangeKeyId: string
+  signingKeyId: string
+  deviceLabel: string
+  exchangeFingerprint: string
+  signingFingerprint: string
+  createdAt: string
+  lastSeenAt: string
+  revokedAt?: string
+}
+
+export interface RecipientTrustInspection {
+  status: 'trusted' | 'first-use' | 'changed'
+  safetyNumber: string
+  signingFingerprints: string[]
+}
+
 export interface ShareRecipient extends User {
   deviceCount: number
 }
@@ -117,11 +150,14 @@ export interface ShareCreateRequest {
   iv: string
   signature: string
   keyId: string
-  signatureVersion: 2
-  cryptoSuite: 'Ed25519' | 'X25519-HKDF-SHA256-AES-256-GCM+Ed25519'
+  senderUserId: string
+  signatureVersion: 3
+  cryptoSuite: 'Ed25519' | 'X25519-OTPK-HKDF-SHA256-AES-256-GCM+Ed25519'
   recipientUserId: string
   ephemeralPublicJwk?: OKPPublicJWK
   keyEnvelopes: KeyEnvelope[]
+  expiresAt: string
+  prekeyClaimToken: string
 }
 
 export interface ShareRecord {

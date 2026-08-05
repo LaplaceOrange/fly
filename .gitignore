@@ -10,5 +10,6 @@
 /web/public/ChineseCanFly.mp3
 coverage/
 .cache/
+/.gocache/
 .playwright-cli/
 *.log

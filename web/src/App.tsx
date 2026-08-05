@@ -3,6 +3,7 @@ import { api } from './api'
 import { ensureModernDeviceKeys } from './crypto'
 import { ActivityFeed } from './components/ActivityFeed'
 import { Avatar } from './components/Avatar'
+import { DeviceKeysModal } from './components/DeviceKeysModal'
 import { Heatmap } from './components/Heatmap'
 import { Leaderboard } from './components/Leaderboard'
 import { ShareModal } from './components/ShareModal'
@@ -39,6 +40,7 @@ function DashboardApp() {
   const [realtime, setRealtime] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [turnstileOpen, setTurnstileOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [devicesOpen, setDevicesOpen] = useState(false)
   const [takeoffSuccessOpen, setTakeoffSuccessOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
   const refreshTimer = useRef<number | undefined>(undefined)
@@ -218,7 +220,7 @@ function DashboardApp() {
           {me.authenticated ? (
             <div className="account">
               <Avatar user={me.user} size={34} />
-              <span><strong>{me.user.displayName}</strong><button onClick={logout}>退出登录</button></span>
+              <span><strong>{me.user.displayName}</strong><span className="account-links"><button onClick={() => setDevicesOpen(true)}>设备密钥</button><button onClick={logout}>退出登录</button></span></span>
             </div>
           ) : <button className="text-button" onClick={() => window.location.href = '/api/auth/login'}>CPOAuth 登录</button>}
         </div>
@@ -291,6 +293,7 @@ function DashboardApp() {
       </footer>
       {turnstileOpen && config && <TurnstileModal siteKey={config.turnstileSiteKey} onClose={() => setTurnstileOpen(false)} onVerify={verifyTakeoff} />}
       {shareOpen && config && dashboard && me.authenticated && <ShareModal user={me.user} dashboard={dashboard} range={range} ttlHours={config.shareTTLHours} onClose={() => setShareOpen(false)} />}
+      {devicesOpen && me.authenticated && <DeviceKeysModal userId={me.user.id} onClose={() => setDevicesOpen(false)} />}
       {takeoffSuccessOpen && <TakeoffSuccessModal onClose={() => setTakeoffSuccessOpen(false)} />}
     </div>
   )
