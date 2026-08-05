@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -221,7 +222,7 @@ func (s *Server) createFlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_turnstile_token", "人机验证 token 无效", 0)
 		return
 	}
-	idempotencyKey, err := randomToken(16)
+	idempotencyKey, err := randomUUID()
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -410,6 +411,19 @@ func randomToken(bytesCount int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buffer), nil
+}
+
+// randomUUID returns an RFC 4122 version 4 UUID for external APIs that
+// require a UUID-form idempotency key, including Cloudflare Siteverify.
+func randomUUID() (string, error) {
+	buffer := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, buffer); err != nil {
+		return "", err
+	}
+	buffer[6] = buffer[6]&0x0f | 0x40
+	buffer[8] = buffer[8]&0x3f | 0x80
+	encoded := hex.EncodeToString(buffer)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
 func secureEqual(a, b string) bool {

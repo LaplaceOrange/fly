@@ -76,7 +76,7 @@ export function TurnstileModal({ siteKey, onClose, onVerify }: {
           className="turnstile-frame"
           title="Cloudflare 人机验证"
           src="/turnstile-frame.html"
-          sandbox="allow-scripts allow-forms"
+          sandbox="allow-scripts allow-same-origin allow-forms"
           referrerPolicy="no-referrer"
           onLoad={initializeFrame}
         />

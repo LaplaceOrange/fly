@@ -91,7 +91,7 @@ func Load() (Config, error) {
 		Location:                  location,
 		CPOAuthClientID:           clientID,
 		CPOAuthClientSecret:       clientSecret,
-		CPOAuthAuthorizeURL:       env("CPOAUTH_AUTHORIZE_URL", "https://www.cpoauth.com/api/oauth/authorize"),
+		CPOAuthAuthorizeURL:       env("CPOAUTH_AUTHORIZE_URL", "https://www.cpoauth.com/oauth/authorize"),
 		CPOAuthTokenURL:           env("CPOAUTH_TOKEN_URL", "https://www.cpoauth.com/api/oauth/token"),
 		CPOAuthUserInfoURL:        env("CPOAUTH_USERINFO_URL", "https://www.cpoauth.com/api/oauth/userinfo"),
 		CPOAuthScopes:             env("CPOAUTH_SCOPES", "openid profile"),

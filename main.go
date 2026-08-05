@@ -61,19 +61,27 @@ func main() {
 	defer stop()
 	go db.CleanupExpiredSessions(ctx, 12*time.Hour, logger)
 
+	listenErr := make(chan error, 1)
 	go func() {
 		logger.Info("server listening", "address", cfg.ListenAddr, "base_url", cfg.PublicBaseURL.String())
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server stopped unexpectedly", "error", err)
-			stop()
+			listenErr <- err
 		}
 	}()
 
-	<-ctx.Done()
+	var runErr error
+	select {
+	case runErr = <-listenErr:
+		logger.Error("server stopped unexpectedly", "error", runErr)
+	case <-ctx.Done():
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	hub.Close()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
+	}
+	if runErr != nil {
+		os.Exit(1)
 	}
 }

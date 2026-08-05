@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -35,6 +36,16 @@ func (oauthMock) ExchangeAndFetchUser(_ context.Context, request cpoauth.TokenRe
 type turnstileMock struct{ err error }
 
 func (mock turnstileMock) Verify(context.Context, string, string, string) error { return mock.err }
+
+func TestRandomUUIDUsesRFC4122Version4Format(t *testing.T) {
+	value, err := randomUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(value) {
+		t.Fatalf("randomUUID returned %q, want RFC 4122 v4 UUID", value)
+	}
+}
 
 func TestOAuthLoginCallbackCreatesSession(t *testing.T) {
 	t.Parallel()
@@ -159,7 +170,7 @@ func TestSignedShareHTTPFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwk := okpPublicJWK{
-		Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(publicKey), Ext: true, KeyOps: []string{"verify"},
+		Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(publicKey), Alg: "EdDSA", Ext: true, KeyOps: []string{"verify"},
 	}
 	keyResponse := authenticatedJSON(t, testServer.URL+"/api/keys", sessionToken, map[string]any{"publicJwk": jwk})
 	defer keyResponse.Body.Close()
@@ -448,7 +459,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	cfg := config.Config{
 		SiteName: "中国人能飞", PublicBaseURL: baseURL, ListenAddr: ":0", DatabasePath: "unused",
 		Location: time.FixedZone("CST", 8*60*60), CPOAuthClientID: "client", CPOAuthClientSecret: "secret",
-		CPOAuthAuthorizeURL: "https://www.cpoauth.com/api/oauth/authorize", CPOAuthTokenURL: "https://www.cpoauth.com/api/oauth/token",
+		CPOAuthAuthorizeURL: "https://www.cpoauth.com/oauth/authorize", CPOAuthTokenURL: "https://www.cpoauth.com/api/oauth/token",
 		CPOAuthUserInfoURL: "https://www.cpoauth.com/api/oauth/userinfo", CPOAuthScopes: "openid profile",
 		TurnstileSiteKey: "site-key", TurnstileSecretKey: "secret-key", TurnstileExpectedAction: "turnstile-spin-v2",
 		TakeoffRateLimit: 10 * time.Minute, SessionSecret: []byte("01234567890123456789012345678901"),

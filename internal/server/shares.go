@@ -33,6 +33,7 @@ type okpPublicJWK struct {
 	Kty    string   `json:"kty"`
 	Crv    string   `json:"crv"`
 	X      string   `json:"x"`
+	Alg    string   `json:"alg,omitempty"`
 	Ext    bool     `json:"ext,omitempty"`
 	KeyOps []string `json:"key_ops,omitempty"`
 }
