@@ -167,6 +167,13 @@ footer a { text-decoration: none; } footer a:hover { color: var(--accent); }
 .message-field textarea { resize: vertical; width: 100%; border: 1px solid var(--line); background: #f8faf6; border-radius: 10px; padding: 11px; color: var(--ink); font: inherit; font-size: 12px; line-height: 1.6; outline: none; }
 .message-field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(237,84,45,.1); }
 .message-field small { justify-self: end; color: var(--muted); font-size: 9px; }
+.recipient-field { display: grid; gap: 7px; margin-top: 14px; text-align: left; }
+.recipient-field > span { font-size: 11px; font-weight: 700; }
+.recipient-field select { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 11px; background: #f8faf6; color: var(--ink); font: inherit; outline: none; }
+.recipient-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(237,84,45,.1); }
+.key-fingerprints { display: grid; gap: 3px; padding: 9px 10px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); overflow-wrap: anywhere; }
+.key-fingerprints strong { color: var(--ink); font-size: 10px; }
+.key-fingerprints small { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
 .encryption-toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px; margin-top: 12px; border: 1px solid var(--line); background: #f8faf6; border-radius: 11px; text-align: left; }
 .encryption-toggle > span { display: grid; gap: 3px; }.encryption-toggle strong { font-size: 11px; }.encryption-toggle small { color: var(--muted); font-size: 9px; }
 .encryption-toggle input { width: 38px; height: 21px; accent-color: var(--accent); }

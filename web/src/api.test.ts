@@ -17,6 +17,10 @@ describe('share API', () => {
       iv: 'iv',
       signature: 'signature',
       keyId: 'key-id',
+      signatureVersion: 2,
+      cryptoSuite: 'Ed25519',
+      recipientUserId: '',
+      keyEnvelopes: [],
       fragmentKey: 'must-stay-in-the-url-fragment',
     } as Parameters<typeof api.createShare>[0] & { fragmentKey: string })
 
@@ -27,6 +31,10 @@ describe('share API', () => {
       iv: 'iv',
       signature: 'signature',
       keyId: 'key-id',
+      signatureVersion: 2,
+      cryptoSuite: 'Ed25519',
+      recipientUserId: '',
+      keyEnvelopes: [],
     })
     expect(request.body).not.toContain('must-stay-in-the-url-fragment')
   })

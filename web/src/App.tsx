@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
+import { ensureModernDeviceKeys } from './crypto'
 import { ActivityFeed } from './components/ActivityFeed'
 import { Avatar } from './components/Avatar'
 import { Heatmap } from './components/Heatmap'
@@ -41,6 +42,7 @@ function DashboardApp() {
   const [takeoffSuccessOpen, setTakeoffSuccessOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
   const refreshTimer = useRef<number | undefined>(undefined)
+  const authenticatedUserID = me.authenticated ? me.user.id : ''
 
   const refreshUsers = useCallback(async (sort = userSort) => {
     const page = await api.users(sort)
@@ -97,6 +99,15 @@ function DashboardApp() {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (!authenticatedUserID) return
+    if (!window.isSecureContext || !window.crypto?.subtle) {
+      setError('当前页面不是安全环境，无法初始化 Ed25519/X25519 设备密钥。请使用 HTTPS。')
+      return
+    }
+    ensureModernDeviceKeys(authenticatedUserID).catch((caught) => setError(`设备加密密钥初始化失败：${errorMessage(caught)}`))
+  }, [authenticatedUserID])
 
   useEffect(() => {
     let socket: WebSocket | undefined

@@ -1,75 +1,282 @@
 import { api } from './api'
-import type { PublicJWK } from './types'
+import type { ExchangeKey, KeyEnvelope, LegacyPublicJWK, OKPPublicJWK, ShareCreateRequest, ShareRecord } from './types'
 
 interface StoredDeviceKey {
   userId: string
-  keyId: string
-  fingerprint: string
-  publicJwk: PublicJWK
-  privateKey: CryptoKey
+  // Legacy ECDSA fields are retained so old encrypted links remain readable.
+  keyId?: string
+  fingerprint?: string
+  publicJwk?: LegacyPublicJWK
+  privateKey?: CryptoKey
+  signingKeyId?: string
+  signingFingerprint?: string
+  signingPublicJwk?: OKPPublicJWK
+  signingPrivateKey?: CryptoKey
+  exchangeKeyId?: string
+  exchangeFingerprint?: string
+  exchangePublicJwk?: OKPPublicJWK
+  exchangePrivateKey?: CryptoKey
+}
+
+interface ModernDeviceKeys {
+  signingKeyId: string
+  signingPrivateKey: CryptoKey
+  exchangeKeyId: string
+  exchangePrivateKey: CryptoKey
 }
 
 const databaseName = 'chinese-can-fly-crypto'
 const storeName = 'device-keys'
+const encryptedSuite = 'X25519-HKDF-SHA256-AES-256-GCM+Ed25519' as const
+const publicSuite = 'Ed25519' as const
+const keyWrapInfo = new TextEncoder().encode('ChineseCanFly share key wrap v1')
+const deviceKeyPromises = new Map<string, Promise<ModernDeviceKeys>>()
 
-export function shareSigningInput(encrypted: boolean, payload: string, iv: string) {
+export function legacyShareSigningInput(encrypted: boolean, payload: string, iv: string) {
   return `share-sign-v1\n${encrypted ? '1' : '0'}\n${payload}\n${iv}`
 }
 
-export async function createSignedShare(userId: string, plaintext: string, encrypted: boolean) {
-  const deviceKey = await ensureDeviceKey(userId)
-  let payload = plaintext
-  let iv = ''
-  let fragmentKey = ''
-  if (encrypted) {
-    const encryptedResult = await encryptAESGCM(plaintext)
-    payload = encryptedResult.ciphertext
-    iv = encryptedResult.iv
-    fragmentKey = encryptedResult.key
+export function modernShareSigningInput(input: Pick<ShareCreateRequest,
+  'encrypted' | 'payload' | 'iv' | 'cryptoSuite' | 'recipientUserId' | 'ephemeralPublicJwk' | 'keyEnvelopes'>) {
+  const envelopes = [...input.keyEnvelopes].sort((left, right) => left.keyId < right.keyId ? -1 : left.keyId > right.keyId ? 1 : 0)
+  const fields = [
+    input.cryptoSuite,
+    String(input.encrypted),
+    input.payload,
+    input.iv,
+    input.recipientUserId,
+    input.ephemeralPublicJwk?.x ?? '',
+    String(envelopes.length),
+    ...envelopes.flatMap((envelope) => [envelope.keyId, envelope.salt, envelope.iv, envelope.wrappedKey]),
+  ]
+  const encoder = new TextEncoder()
+  return `share-sign-v2\n${fields.map((field) => `${encoder.encode(field).byteLength}:${field}\n`).join('')}`
+}
+
+export function ensureModernDeviceKeys(userId: string) {
+  const existing = deviceKeyPromises.get(userId)
+  if (existing) return existing
+  const created = ensureModernDeviceKeysInner(userId).finally(() => deviceKeyPromises.delete(userId))
+  deviceKeyPromises.set(userId, created)
+  return created
+}
+
+export async function createSignedShare(
+  userId: string,
+  plaintext: string,
+  options: { encrypted: false } | { encrypted: true; recipientUserId: string; recipientKeys: ExchangeKey[] },
+): Promise<ShareCreateRequest> {
+  const deviceKeys = await ensureModernDeviceKeys(userId)
+  let unsigned: Omit<ShareCreateRequest, 'signature' | 'keyId'>
+
+  if (options.encrypted) {
+    const encrypted = await encryptForRecipients(plaintext, options.recipientKeys)
+    unsigned = {
+      encrypted: true,
+      payload: encrypted.payload,
+      iv: encrypted.iv,
+      signatureVersion: 2,
+      cryptoSuite: encryptedSuite,
+      recipientUserId: options.recipientUserId,
+      ephemeralPublicJwk: encrypted.ephemeralPublicJwk,
+      keyEnvelopes: encrypted.keyEnvelopes,
+    }
+  } else {
+    unsigned = {
+      encrypted: false,
+      payload: plaintext,
+      iv: '',
+      signatureVersion: 2,
+      cryptoSuite: publicSuite,
+      recipientUserId: '',
+      keyEnvelopes: [],
+    }
   }
-  const data = new TextEncoder().encode(shareSigningInput(encrypted, payload, iv))
-  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, deviceKey.privateKey, data)
+
+  const signature = await crypto.subtle.sign(
+    { name: 'Ed25519' },
+    deviceKeys.signingPrivateKey,
+    new TextEncoder().encode(modernShareSigningInput(unsigned)),
+  )
   return {
-    encrypted, payload, iv, keyId: deviceKey.keyId,
-    signature: toBase64URL(new Uint8Array(signature)), fragmentKey,
+    ...unsigned,
+    keyId: deviceKeys.signingKeyId,
+    signature: toBase64URL(new Uint8Array(signature)),
   }
 }
 
-export async function verifyShare(publicJwk: PublicJWK, encrypted: boolean, payload: string, iv: string, signature: string) {
-  const publicKey = await crypto.subtle.importKey('jwk', publicJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+export async function encryptForRecipients(plaintext: string, recipientKeys: ExchangeKey[]) {
+  if (!recipientKeys.length) throw new Error('接收者没有可用的 X25519 设备密钥')
+  const contentKeyBytes = crypto.getRandomValues(new Uint8Array(32))
+  try {
+    const contentIV = crypto.getRandomValues(new Uint8Array(12))
+    const contentKey = await crypto.subtle.importKey('raw', contentKeyBytes, { name: 'AES-GCM' }, false, ['encrypt'])
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: contentIV }, contentKey, new TextEncoder().encode(plaintext))
+
+    const ephemeral = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']) as CryptoKeyPair
+    const ephemeralPublicJwk = await crypto.subtle.exportKey('jwk', ephemeral.publicKey) as OKPPublicJWK
+    const keyEnvelopes: KeyEnvelope[] = []
+    for (const recipientKey of recipientKeys) {
+      const salt = crypto.getRandomValues(new Uint8Array(16))
+      const wrapIV = crypto.getRandomValues(new Uint8Array(12))
+      const wrappingKey = await deriveWrappingKey(ephemeral.privateKey, recipientKey.publicJwk, salt, ['encrypt'])
+      const wrappedKey = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: wrapIV }, wrappingKey, contentKeyBytes)
+      keyEnvelopes.push({
+        keyId: recipientKey.keyId,
+        salt: toBase64URL(salt),
+        iv: toBase64URL(wrapIV),
+        wrappedKey: toBase64URL(new Uint8Array(wrappedKey)),
+      })
+    }
+    return {
+      payload: toBase64URL(new Uint8Array(ciphertext)),
+      iv: toBase64URL(contentIV),
+      ephemeralPublicJwk,
+      keyEnvelopes,
+    }
+  } finally {
+    contentKeyBytes.fill(0)
+  }
+}
+
+export async function verifyShare(share: ShareRecord) {
+  if (share.signatureVersion >= 2) {
+    if (share.signingAlgorithm !== 'Ed25519' || share.publicJwk.kty !== 'OKP' || share.publicJwk.crv !== 'Ed25519') return false
+    const publicKey = await crypto.subtle.importKey('jwk', share.publicJwk, { name: 'Ed25519' }, false, ['verify'])
+    return crypto.subtle.verify(
+      { name: 'Ed25519' },
+      publicKey,
+      fromBase64URL(share.signature),
+      new TextEncoder().encode(modernShareSigningInput({
+        encrypted: share.encrypted,
+        payload: share.payload,
+        iv: share.iv,
+        cryptoSuite: share.cryptoSuite as ShareCreateRequest['cryptoSuite'],
+        recipientUserId: share.recipientUserId,
+        ephemeralPublicJwk: share.ephemeralPublicJwk,
+        keyEnvelopes: share.keyEnvelopes,
+      })),
+    )
+  }
+  if (share.publicJwk.kty !== 'EC') return false
+  const publicKey = await crypto.subtle.importKey('jwk', share.publicJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
   return crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, publicKey, fromBase64URL(signature),
-    new TextEncoder().encode(shareSigningInput(encrypted, payload, iv)),
+    { name: 'ECDSA', hash: 'SHA-256' },
+    publicKey,
+    fromBase64URL(share.signature),
+    new TextEncoder().encode(legacyShareSigningInput(share.encrypted, share.payload, share.iv)),
   )
 }
 
-export async function decryptAESGCM(ciphertext: string, iv: string, key: string) {
+export async function decryptModernShare(userId: string, share: ShareRecord) {
+  if (!share.encrypted || share.signatureVersion < 2 || !share.ephemeralPublicJwk) throw new Error('分享不包含新版端到端加密信封')
+  const stored = await idbGet(userId)
+  if (!stored?.exchangeKeyId || !stored.exchangePrivateKey) throw new Error('此设备没有接收该分享所需的 X25519 私钥')
+  return decryptWithExchangePrivateKey(stored.exchangePrivateKey, stored.exchangeKeyId, share)
+}
+
+export async function decryptWithExchangePrivateKey(
+  privateKey: CryptoKey,
+  exchangeKeyId: string,
+  share: Pick<ShareRecord, 'encrypted' | 'signatureVersion' | 'ephemeralPublicJwk' | 'keyEnvelopes' | 'iv' | 'payload'>,
+) {
+  if (!share.encrypted || share.signatureVersion < 2 || !share.ephemeralPublicJwk) throw new Error('分享不包含新版端到端加密信封')
+  const envelope = share.keyEnvelopes.find((candidate) => candidate.keyId === exchangeKeyId)
+  if (!envelope) throw new Error('该分享创建时未包含此设备的密钥信封')
+
+  const wrappingKey = await deriveWrappingKey(
+    privateKey,
+    share.ephemeralPublicJwk,
+    fromBase64URL(envelope.salt),
+    ['decrypt'],
+  )
+  const rawContentKey = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromBase64URL(envelope.iv) },
+    wrappingKey,
+    fromBase64URL(envelope.wrappedKey),
+  )
+  const rawContentKeyBytes = new Uint8Array(rawContentKey)
+  try {
+    const contentKey = await crypto.subtle.importKey('raw', rawContentKeyBytes, { name: 'AES-GCM' }, false, ['decrypt'])
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: fromBase64URL(share.iv) },
+      contentKey,
+      fromBase64URL(share.payload),
+    )
+    return new TextDecoder().decode(plaintext)
+  } finally {
+    rawContentKeyBytes.fill(0)
+  }
+}
+
+export async function decryptLegacyAESGCM(ciphertext: string, iv: string, key: string) {
   const aesKey = await crypto.subtle.importKey('raw', fromBase64URL(key), 'AES-GCM', false, ['decrypt'])
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64URL(iv) }, aesKey, fromBase64URL(ciphertext))
   return new TextDecoder().decode(plaintext)
 }
 
-async function encryptAESGCM(plaintext: string) {
-  const rawKey = crypto.getRandomValues(new Uint8Array(32))
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const key = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt'])
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext))
-  return { ciphertext: toBase64URL(new Uint8Array(ciphertext)), iv: toBase64URL(iv), key: toBase64URL(rawKey) }
+async function deriveWrappingKey(
+  privateKey: CryptoKey,
+  peerPublicJwk: OKPPublicJWK,
+  salt: Uint8Array,
+  usages: KeyUsage[],
+) {
+  if (peerPublicJwk.kty !== 'OKP' || peerPublicJwk.crv !== 'X25519') throw new Error('接收者 X25519 公钥无效')
+  const peerPublicKey = await crypto.subtle.importKey('jwk', peerPublicJwk, { name: 'X25519' }, false, [])
+  const sharedSecret = await crypto.subtle.deriveBits({ name: 'X25519', public: peerPublicKey }, privateKey, 256)
+  const sharedSecretBytes = new Uint8Array(sharedSecret)
+  try {
+    const material = await crypto.subtle.importKey('raw', sharedSecretBytes, 'HKDF', false, ['deriveKey'])
+    return crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: keyWrapInfo },
+      material,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      usages,
+    )
+  } finally {
+    sharedSecretBytes.fill(0)
+  }
 }
 
-async function ensureDeviceKey(userId: string): Promise<StoredDeviceKey> {
-  const existing = await idbGet(userId)
-  if (existing) return existing
-  const generated = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
-  const publicJwk = await crypto.subtle.exportKey('jwk', generated.publicKey) as PublicJWK
-  const privateJwk = await crypto.subtle.exportKey('jwk', generated.privateKey)
-  const privateKey = await crypto.subtle.importKey('jwk', privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
-  const registered = await api.registerKey(publicJwk)
-  const record: StoredDeviceKey = {
-    userId, keyId: registered.keyId, fingerprint: registered.fingerprint, publicJwk, privateKey,
+async function ensureModernDeviceKeysInner(userId: string): Promise<ModernDeviceKeys> {
+  const existing = await idbGet(userId) ?? { userId }
+  let next = existing
+
+  if (!next.signingKeyId || !next.signingPrivateKey || !next.signingPublicJwk) {
+    const generated = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']) as CryptoKeyPair
+    const publicJwk = await crypto.subtle.exportKey('jwk', generated.publicKey) as OKPPublicJWK
+    const registered = await api.registerKey(publicJwk)
+    next = {
+      ...next,
+      signingKeyId: registered.keyId,
+      signingFingerprint: registered.fingerprint,
+      signingPublicJwk: publicJwk,
+      signingPrivateKey: generated.privateKey,
+    }
+    await idbPut(next)
   }
-  await idbPut(record)
-  return record
+
+  if (!next.exchangeKeyId || !next.exchangePrivateKey || !next.exchangePublicJwk) {
+    const generated = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']) as CryptoKeyPair
+    const publicJwk = await crypto.subtle.exportKey('jwk', generated.publicKey) as OKPPublicJWK
+    const registered = await api.registerExchangeKey(publicJwk)
+    next = {
+      ...next,
+      exchangeKeyId: registered.keyId,
+      exchangeFingerprint: registered.fingerprint,
+      exchangePublicJwk: publicJwk,
+      exchangePrivateKey: generated.privateKey,
+    }
+    await idbPut(next)
+  }
+
+  return {
+    signingKeyId: next.signingKeyId!,
+    signingPrivateKey: next.signingPrivateKey!,
+    exchangeKeyId: next.exchangeKeyId!,
+    exchangePrivateKey: next.exchangePrivateKey!,
+  }
 }
 
 function openDatabase(): Promise<IDBDatabase> {

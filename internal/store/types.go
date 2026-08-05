@@ -1,6 +1,11 @@
 package store
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrDeviceKeyLimit = errors.New("device key limit exceeded")
 
 type User struct {
 	ID           string     `json:"id"`
@@ -72,23 +77,43 @@ type RateLimitError struct {
 type SigningKey struct {
 	ID          string    `json:"id"`
 	UserID      string    `json:"-"`
+	Algorithm   string    `json:"algorithm"`
 	PublicJWK   string    `json:"publicJwk"`
 	Fingerprint string    `json:"fingerprint"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
-type Share struct {
+type ExchangeKey struct {
 	ID          string    `json:"id"`
-	Encrypted   bool      `json:"encrypted"`
-	Payload     string    `json:"payload"`
-	IV          string    `json:"iv"`
-	Signature   string    `json:"signature"`
-	CreatedAt   time.Time `json:"createdAt"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-	Signer      User      `json:"signer"`
-	KeyID       string    `json:"keyId"`
+	UserID      string    `json:"-"`
 	PublicJWK   string    `json:"publicJwk"`
 	Fingerprint string    `json:"fingerprint"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type ShareRecipient struct {
+	User
+	DeviceCount int `json:"deviceCount"`
+}
+
+type Share struct {
+	ID                 string    `json:"id"`
+	Encrypted          bool      `json:"encrypted"`
+	Payload            string    `json:"payload"`
+	IV                 string    `json:"iv"`
+	Signature          string    `json:"signature"`
+	SignatureVersion   int       `json:"signatureVersion"`
+	CryptoSuite        string    `json:"cryptoSuite"`
+	RecipientUserID    string    `json:"recipientUserId,omitempty"`
+	EphemeralPublicJWK string    `json:"ephemeralPublicJwk,omitempty"`
+	KeyEnvelopes       string    `json:"keyEnvelopes,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	ExpiresAt          time.Time `json:"expiresAt"`
+	Signer             User      `json:"signer"`
+	KeyID              string    `json:"keyId"`
+	SigningAlgorithm   string    `json:"signingAlgorithm"`
+	PublicJWK          string    `json:"publicJwk"`
+	Fingerprint        string    `json:"fingerprint"`
 }
 
 func (e *RateLimitError) Error() string { return "takeoff rate limit exceeded" }

@@ -70,13 +70,53 @@ export interface RealtimeEvent {
   flight?: Flight
 }
 
-export interface PublicJWK {
+export interface LegacyPublicJWK {
   kty: 'EC'
   crv: 'P-256'
   x: string
   y: string
   ext?: boolean
   key_ops?: string[]
+}
+
+export interface OKPPublicJWK {
+  kty: 'OKP'
+  crv: 'Ed25519' | 'X25519'
+  x: string
+  ext?: boolean
+  key_ops?: string[]
+}
+
+export type PublicJWK = LegacyPublicJWK | OKPPublicJWK
+
+export interface ExchangeKey {
+  keyId: string
+  publicJwk: OKPPublicJWK
+  fingerprint: string
+}
+
+export interface ShareRecipient extends User {
+  deviceCount: number
+}
+
+export interface KeyEnvelope {
+  keyId: string
+  salt: string
+  iv: string
+  wrappedKey: string
+}
+
+export interface ShareCreateRequest {
+  encrypted: boolean
+  payload: string
+  iv: string
+  signature: string
+  keyId: string
+  signatureVersion: 2
+  cryptoSuite: 'Ed25519' | 'X25519-HKDF-SHA256-AES-256-GCM+Ed25519'
+  recipientUserId: string
+  ephemeralPublicJwk?: OKPPublicJWK
+  keyEnvelopes: KeyEnvelope[]
 }
 
 export interface ShareRecord {
@@ -89,6 +129,12 @@ export interface ShareRecord {
   expiresAt: string
   signer: User
   keyId: string
+  signatureVersion: number
+  cryptoSuite: string
+  signingAlgorithm: 'ECDSA-P256-SHA256' | 'Ed25519'
+  recipientUserId: string
+  ephemeralPublicJwk?: OKPPublicJWK
+  keyEnvelopes: KeyEnvelope[]
   publicJwk: PublicJWK
   fingerprint: string
 }

@@ -1,41 +1,43 @@
 package server
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"math/big"
 	"testing"
 )
 
-func TestVerifyShareSignature(t *testing.T) {
+func TestVerifyModernShareSignature(t *testing.T) {
 	t.Parallel()
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := shareRequest{Encrypted: true, Payload: "ciphertext", IV: "iv"}
-	digest := sha256.Sum256([]byte(shareSigningInput(request.Encrypted, request.Payload, request.IV)))
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
-	if err != nil {
-		t.Fatal(err)
+	request := shareRequest{
+		Encrypted: false, Payload: `{"version":1}`, SignatureVersion: 2, CryptoSuite: publicCryptoSuite,
 	}
-	raw := append(pad32(r), pad32(s)...)
-	request.Signature = base64.RawURLEncoding.EncodeToString(raw)
-	if !verifyShareSignature(&privateKey.PublicKey, request) {
-		t.Fatal("valid share signature was rejected")
+	request.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(modernShareSigningInput(request))))
+	if !verifyModernShareSignature(publicKey, request) {
+		t.Fatal("valid Ed25519 share signature was rejected")
 	}
-	request.Payload = "modified"
-	if verifyShareSignature(&privateKey.PublicKey, request) {
-		t.Fatal("modified share payload was accepted")
+	request.Payload = `{"version":2}`
+	if verifyModernShareSignature(publicKey, request) {
+		t.Fatal("modified modern share payload was accepted")
 	}
 }
 
-func pad32(value *big.Int) []byte {
-	result := make([]byte, 32)
-	bytes := value.Bytes()
-	copy(result[32-len(bytes):], bytes)
-	return result
+func TestModernShareSigningInputCanonicalFormat(t *testing.T) {
+	t.Parallel()
+	request := shareRequest{Encrypted: false, Payload: `起飞`, SignatureVersion: 2, CryptoSuite: publicCryptoSuite}
+	want := "share-sign-v2\n7:Ed25519\n5:false\n6:起飞\n0:\n0:\n0:\n1:0\n"
+	if got := modernShareSigningInput(request); got != want {
+		t.Fatalf("canonical input mismatch\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestValidateX25519PublicKeyRejectsLowOrderPoint(t *testing.T) {
+	t.Parallel()
+	if err := validateX25519PublicKey(make([]byte, 32)); err == nil {
+		t.Fatal("all-zero X25519 public key was accepted")
+	}
 }

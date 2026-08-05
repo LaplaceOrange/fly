@@ -3,10 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -155,13 +154,12 @@ func TestSignedShareHTTPFlow(t *testing.T) {
 	if err := database.CreateSession(ctx, store.SessionHash(sessionToken), user.ID, now, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	jwk := publicJWK{
-		Kty: "EC", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(pad32(privateKey.X)),
-		Y: base64.RawURLEncoding.EncodeToString(pad32(privateKey.Y)), Ext: true, KeyOps: []string{"verify"},
+	jwk := okpPublicJWK{
+		Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(publicKey), Ext: true, KeyOps: []string{"verify"},
 	}
 	keyResponse := authenticatedJSON(t, testServer.URL+"/api/keys", sessionToken, map[string]any{"publicJwk": jwk})
 	defer keyResponse.Body.Close()
@@ -176,14 +174,11 @@ func TestSignedShareHTTPFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := `{"version":1,"message":"signed"}`
-	digest := sha256.Sum256([]byte(shareSigningInput(false, payload, "")))
-	rValue, sValue, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	signature := base64.RawURLEncoding.EncodeToString(append(pad32(rValue), pad32(sValue)...))
+	shareToSign := shareRequest{Encrypted: false, Payload: payload, SignatureVersion: 2, CryptoSuite: publicCryptoSuite}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(modernShareSigningInput(shareToSign))))
 	shareResponse := authenticatedJSON(t, testServer.URL+"/api/shares", sessionToken, map[string]any{
 		"encrypted": false, "payload": payload, "iv": "", "signature": signature, "keyId": registered.KeyID,
+		"signatureVersion": 2, "cryptoSuite": publicCryptoSuite, "recipientUserId": "", "keyEnvelopes": []any{},
 	})
 	defer shareResponse.Body.Close()
 	if shareResponse.StatusCode != http.StatusCreated {
@@ -206,6 +201,104 @@ func TestSignedShareHTTPFlow(t *testing.T) {
 	}
 }
 
+func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
+	t.Parallel()
+	testServer, database := newTestServer(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	sender, err := database.UpsertUser(ctx, store.User{ID: "sender", Username: "sender", DisplayName: "Sender"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := database.UpsertUser(ctx, store.User{ID: "recipient", Username: "recipient", DisplayName: "Recipient"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for token, userID := range map[string]string{"sender-session": sender.ID, "recipient-session": recipient.ID} {
+		if err := database.CreateSession(ctx, store.SessionHash(token), userID, now, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	signingPublic, signingPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingResponse := authenticatedJSON(t, testServer.URL+"/api/keys", "sender-session", map[string]any{"publicJwk": okpPublicJWK{
+		Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(signingPublic),
+	}})
+	defer signingResponse.Body.Close()
+	var signingRegistered struct {
+		KeyID string `json:"keyId"`
+	}
+	if err := json.NewDecoder(signingResponse.Body).Decode(&signingRegistered); err != nil {
+		t.Fatal(err)
+	}
+	recipientPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeResponse := authenticatedJSON(t, testServer.URL+"/api/exchange-keys", "recipient-session", map[string]any{"publicJwk": okpPublicJWK{
+		Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(recipientPrivate.PublicKey().Bytes()),
+	}})
+	defer exchangeResponse.Body.Close()
+	var exchangeRegistered struct {
+		KeyID string `json:"keyId"`
+	}
+	if err := json.NewDecoder(exchangeResponse.Body).Decode(&exchangeRegistered); err != nil {
+		t.Fatal(err)
+	}
+	ephemeralPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := shareRequest{
+		Encrypted:          true,
+		Payload:            base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
+		IV:                 base64.RawURLEncoding.EncodeToString(make([]byte, 12)),
+		KeyID:              signingRegistered.KeyID,
+		SignatureVersion:   2,
+		CryptoSuite:        encryptedCryptoSuite,
+		RecipientUserID:    recipient.ID,
+		EphemeralPublicJWK: okpPublicJWK{Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(ephemeralPrivate.PublicKey().Bytes())},
+		KeyEnvelopes: []keyEnvelope{{
+			KeyID:      exchangeRegistered.KeyID,
+			Salt:       base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
+			IV:         base64.RawURLEncoding.EncodeToString(make([]byte, 12)),
+			WrappedKey: base64.RawURLEncoding.EncodeToString(make([]byte, 48)),
+		}},
+	}
+	request.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(signingPrivate, []byte(modernShareSigningInput(request))))
+	createdResponse := authenticatedJSON(t, testServer.URL+"/api/shares", "sender-session", request)
+	defer createdResponse.Body.Close()
+	if createdResponse.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createdResponse.Body)
+		t.Fatalf("encrypted share creation returned %d: %s", createdResponse.StatusCode, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(createdResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := http.Get(testServer.URL + "/api/shares/" + created.ID); err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous encrypted share fetch = %v, %v", response, err)
+	} else {
+		response.Body.Close()
+	}
+	if response := authenticatedGet(t, testServer.URL+"/api/shares/"+created.ID, "sender-session"); response.StatusCode != http.StatusForbidden {
+		response.Body.Close()
+		t.Fatalf("sender encrypted share fetch returned %d", response.StatusCode)
+	} else {
+		response.Body.Close()
+	}
+	if response := authenticatedGet(t, testServer.URL+"/api/shares/"+created.ID, "recipient-session"); response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		t.Fatalf("recipient encrypted share fetch returned %d", response.StatusCode)
+	} else {
+		response.Body.Close()
+	}
+}
+
 func authenticatedJSON(t *testing.T, endpoint, token string, payload any) *http.Response {
 	t.Helper()
 	body, err := json.Marshal(payload)
@@ -218,6 +311,20 @@ func authenticatedJSON(t *testing.T, endpoint, token string, payload any) *http.
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "http://example.com")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func authenticatedGet(t *testing.T, endpoint, token string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

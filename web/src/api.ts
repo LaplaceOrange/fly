@@ -1,4 +1,4 @@
-import { APIError, type Dashboard, type Me, type PublicConfig, type PublicJWK, type RangeName, type ShareRecord, type UsersPage } from './types'
+import { APIError, type Dashboard, type ExchangeKey, type Me, type OKPPublicJWK, type PublicConfig, type RangeName, type ShareCreateRequest, type ShareRecipient, type ShareRecord, type UsersPage } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -34,10 +34,15 @@ export const api = {
       body: JSON.stringify({ turnstileToken }),
     }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
-  registerKey: (publicJwk: PublicJWK) => request<{ keyId: string; fingerprint: string }>('/api/keys', {
+  registerKey: (publicJwk: OKPPublicJWK) => request<{ keyId: string; fingerprint: string; algorithm: 'Ed25519' }>('/api/keys', {
     method: 'POST', body: JSON.stringify({ publicJwk }),
   }),
-  createShare: (body: { encrypted: boolean; payload: string; iv: string; signature: string; keyId: string }) =>
+  registerExchangeKey: (publicJwk: OKPPublicJWK) => request<{ keyId: string; fingerprint: string; algorithm: 'X25519' }>('/api/exchange-keys', {
+    method: 'POST', body: JSON.stringify({ publicJwk }),
+  }),
+  shareRecipients: () => request<{ recipients: ShareRecipient[] }>('/api/share-recipients'),
+  recipientKeys: (userId: string) => request<{ keys: ExchangeKey[] }>(`/api/share-recipients/${encodeURIComponent(userId)}/keys`),
+  createShare: (body: ShareCreateRequest) =>
     request<{ id: string; url: string; expiresAt: string }>('/api/shares', {
       method: 'POST',
       // Enumerate the wire fields so encryption keys or other client-only data can
@@ -48,6 +53,11 @@ export const api = {
         iv: body.iv,
         signature: body.signature,
         keyId: body.keyId,
+        signatureVersion: body.signatureVersion,
+        cryptoSuite: body.cryptoSuite,
+        recipientUserId: body.recipientUserId,
+        ephemeralPublicJwk: body.ephemeralPublicJwk,
+        keyEnvelopes: body.keyEnvelopes,
       }),
     }),
   share: (id: string) => request<ShareRecord>(`/api/shares/${encodeURIComponent(id)}`),

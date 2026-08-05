@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -82,6 +81,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS user_keys (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  algorithm TEXT NOT NULL DEFAULT 'ECDSA-P256-SHA256',
+  public_jwk TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, fingerprint)
+);
+CREATE TABLE IF NOT EXISTS user_exchange_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   public_jwk TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
   created_at INTEGER NOT NULL,
@@ -95,6 +103,11 @@ CREATE TABLE IF NOT EXISTS shares (
   payload TEXT NOT NULL,
   iv TEXT NOT NULL DEFAULT '',
   signature TEXT NOT NULL,
+  signature_version INTEGER NOT NULL DEFAULT 1,
+  crypto_suite TEXT NOT NULL DEFAULT 'legacy-aes-256-gcm+ecdsa-p256-sha256',
+  recipient_user_id TEXT NOT NULL DEFAULT '',
+  ephemeral_public_jwk TEXT NOT NULL DEFAULT '',
+  key_envelopes TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
@@ -104,8 +117,58 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_users_total ON users(total_flights DESC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_users_last_flight ON users(last_flight_at DESC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at);
+CREATE INDEX IF NOT EXISTS idx_exchange_keys_user ON user_exchange_keys(user_id, created_at DESC);
 `
-	_, err := s.db.ExecContext(ctx, schema)
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	columns := []struct {
+		table      string
+		name       string
+		definition string
+	}{
+		{"user_keys", "algorithm", "TEXT NOT NULL DEFAULT 'ECDSA-P256-SHA256'"},
+		{"shares", "signature_version", "INTEGER NOT NULL DEFAULT 1"},
+		{"shares", "crypto_suite", "TEXT NOT NULL DEFAULT 'legacy-aes-256-gcm+ecdsa-p256-sha256'"},
+		{"shares", "recipient_user_id", "TEXT NOT NULL DEFAULT ''"},
+		{"shares", "ephemeral_public_jwk", "TEXT NOT NULL DEFAULT ''"},
+		{"shares", "key_envelopes", "TEXT NOT NULL DEFAULT '[]'"},
+	}
+	for _, column := range columns {
+		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_shares_recipient ON shares(recipient_user_id, expires_at)`)
+	return err
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = s.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
 	return err
 }
 
@@ -130,8 +193,4 @@ func (s *Store) CleanupExpiredSessions(ctx context.Context, interval time.Durati
 			cleanup()
 		}
 	}
-}
-
-func cursorEncode(value int64, id string) string {
-	return url.QueryEscape(fmt.Sprintf("%d:%s", value, id))
 }

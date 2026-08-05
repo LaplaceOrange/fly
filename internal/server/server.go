@@ -97,6 +97,8 @@ func (s *Server) routes() http.Handler {
 		api.Get("/me", s.me)
 		api.Get("/realtime", s.realtime)
 		api.Get("/shares/{shareID}", s.getShare)
+		api.Get("/share-recipients", s.shareRecipients)
+		api.Get("/share-recipients/{userID}/keys", s.recipientExchangeKeys)
 		api.Route("/auth", func(auth chi.Router) {
 			auth.Get("/login", s.authLogin)
 			auth.Get("/callback", s.authCallback)
@@ -104,6 +106,7 @@ func (s *Server) routes() http.Handler {
 		})
 		api.With(s.sameOrigin).Post("/flights", s.createFlight)
 		api.With(s.sameOrigin).Post("/keys", s.registerSigningKey)
+		api.With(s.sameOrigin).Post("/exchange-keys", s.registerExchangeKey)
 		api.With(s.sameOrigin).Post("/shares", s.createShare)
 	})
 	router.NotFound(s.serveFrontend)
