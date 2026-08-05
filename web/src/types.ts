@@ -93,6 +93,11 @@ export interface ExchangeKey {
   keyId: string
   publicJwk: OKPPublicJWK
   fingerprint: string
+  signingKeyId: string
+  bindingVersion: 1
+  bindingSignature: string
+  signingPublicJwk: OKPPublicJWK
+  signingFingerprint: string
 }
 
 export interface ShareRecipient extends User {

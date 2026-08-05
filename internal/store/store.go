@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS user_exchange_keys (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   public_jwk TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  signing_key_id TEXT NOT NULL DEFAULT '',
+  binding_version INTEGER NOT NULL DEFAULT 0,
+  binding_signature TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   UNIQUE(user_id, fingerprint)
 );
@@ -128,6 +131,9 @@ CREATE INDEX IF NOT EXISTS idx_exchange_keys_user ON user_exchange_keys(user_id,
 		definition string
 	}{
 		{"user_keys", "algorithm", "TEXT NOT NULL DEFAULT 'ECDSA-P256-SHA256'"},
+		{"user_exchange_keys", "signing_key_id", "TEXT NOT NULL DEFAULT ''"},
+		{"user_exchange_keys", "binding_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"user_exchange_keys", "binding_signature", "TEXT NOT NULL DEFAULT ''"},
 		{"shares", "signature_version", "INTEGER NOT NULL DEFAULT 1"},
 		{"shares", "crypto_suite", "TEXT NOT NULL DEFAULT 'legacy-aes-256-gcm+ecdsa-p256-sha256'"},
 		{"shares", "recipient_user_id", "TEXT NOT NULL DEFAULT ''"},

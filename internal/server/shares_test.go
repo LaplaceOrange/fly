@@ -35,6 +35,32 @@ func TestModernShareSigningInputCanonicalFormat(t *testing.T) {
 	}
 }
 
+func TestExchangeKeyBindingSignatureAndCanonicalFormat(t *testing.T) {
+	t.Parallel()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeJWK := okpPublicJWK{Kty: "OKP", Crv: "X25519", X: "x"}
+	_, fingerprint := canonicalOKPKey(exchangeJWK)
+	if fingerprint != "WrTGFJjPeIHHytZ5ehJyyCmZdmf6dEMtnhnHFKhqMYU" {
+		t.Fatalf("unexpected X25519 fingerprint: %s", fingerprint)
+	}
+	input := exchangeKeyBindingInput("用户", "sig", exchangeJWK)
+	want := "exchange-key-binding-v1\n6:用户\n3:sig\n7:Ed25519\n6:X25519\n1:x\n"
+	if input != want {
+		t.Fatalf("binding canonical input mismatch\nwant: %q\n got: %q", want, input)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(input)))
+	if !verifyExchangeKeyBindingSignature(publicKey, "用户", "sig", exchangeJWK, signature) {
+		t.Fatal("valid X25519 Ed25519 binding was rejected")
+	}
+	exchangeJWK.X = "changed"
+	if verifyExchangeKeyBindingSignature(publicKey, "用户", "sig", exchangeJWK, signature) {
+		t.Fatal("modified X25519 public key binding was accepted")
+	}
+}
+
 func TestValidateX25519PublicKeyRejectsLowOrderPoint(t *testing.T) {
 	t.Parallel()
 	if err := validateX25519PublicKey(make([]byte, 32)); err == nil {

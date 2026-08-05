@@ -108,15 +108,27 @@ func TestExchangeKeysRecipientsAndModernEnvelopePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recipientSigning, err := db.RegisterSigningKey(ctx, SigningKey{
+		ID: "recipient-ed-key", UserID: recipient.ID, Algorithm: "Ed25519", PublicJWK: `{"kty":"OKP","crv":"Ed25519","x":"recipient"}`,
+		Fingerprint: "recipient-ed-fingerprint", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.RegisterExchangeKey(ctx, ExchangeKey{
 		ID: "x-key", UserID: recipient.ID, PublicJWK: `{"kty":"OKP","crv":"X25519","x":"x"}`,
-		Fingerprint: "x-fingerprint", CreatedAt: now,
+		Fingerprint: "x-fingerprint", SigningKeyID: recipientSigning.ID, BindingVersion: 1,
+		BindingSignature: "binding-signature", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	recipients, err := db.ShareRecipients(ctx, sender.ID, 100)
 	if err != nil || len(recipients) != 1 || recipients[0].ID != recipient.ID || recipients[0].DeviceCount != 1 {
 		t.Fatalf("unexpected recipients: %+v (%v)", recipients, err)
+	}
+	exchangeKeys, err := db.ExchangeKeys(ctx, recipient.ID)
+	if err != nil || len(exchangeKeys) != 1 || exchangeKeys[0].SigningKeyID != recipientSigning.ID || exchangeKeys[0].SigningFingerprint != recipientSigning.Fingerprint {
+		t.Fatalf("unexpected bound exchange keys: %+v (%v)", exchangeKeys, err)
 	}
 	share := Share{
 		ID: "modern-share", Encrypted: true, Payload: "ciphertext", IV: "iv", Signature: "signature",
@@ -148,13 +160,15 @@ func TestExchangeKeyDeviceLimit(t *testing.T) {
 	for index := 0; index < 32; index++ {
 		if _, err := db.RegisterExchangeKey(ctx, ExchangeKey{
 			ID: fmt.Sprintf("key-%02d", index), UserID: user.ID, PublicJWK: fmt.Sprintf(`{"x":%d}`, index),
-			Fingerprint: fmt.Sprintf("fingerprint-%02d", index), CreatedAt: now.Add(time.Duration(index) * time.Second),
+			Fingerprint: fmt.Sprintf("fingerprint-%02d", index), SigningKeyID: "signing-key", BindingVersion: 1,
+			BindingSignature: fmt.Sprintf("signature-%02d", index), CreatedAt: now.Add(time.Duration(index) * time.Second),
 		}); err != nil {
 			t.Fatalf("register exchange key %d: %v", index, err)
 		}
 	}
 	_, err = db.RegisterExchangeKey(ctx, ExchangeKey{
-		ID: "key-over-limit", UserID: user.ID, PublicJWK: `{"x":32}`, Fingerprint: "fingerprint-over-limit", CreatedAt: now,
+		ID: "key-over-limit", UserID: user.ID, PublicJWK: `{"x":32}`, Fingerprint: "fingerprint-over-limit",
+		SigningKeyID: "signing-key", BindingVersion: 1, BindingSignature: "signature-over-limit", CreatedAt: now,
 	})
 	if !errors.Is(err, ErrDeviceKeyLimit) {
 		t.Fatalf("33rd exchange key error = %v, want ErrDeviceKeyLimit", err)
@@ -175,6 +189,10 @@ CREATE TABLE users (
   last_login_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE user_keys (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), public_jwk TEXT NOT NULL,
+  fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(user_id, fingerprint)
+);
+CREATE TABLE user_exchange_keys (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), public_jwk TEXT NOT NULL,
   fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(user_id, fingerprint)
 );
@@ -239,6 +257,29 @@ CREATE TABLE shares (
 	keyRows.Close()
 	if !algorithmFound {
 		t.Fatal("migration did not add user_keys.algorithm")
+	}
+	exchangeColumns := map[string]bool{"signing_key_id": false, "binding_version": false, "binding_signature": false}
+	exchangeRows, err := db.db.Query(`PRAGMA table_info(user_exchange_keys)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for exchangeRows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := exchangeRows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			exchangeRows.Close()
+			t.Fatal(err)
+		}
+		if _, expected := exchangeColumns[name]; expected {
+			exchangeColumns[name] = true
+		}
+	}
+	exchangeRows.Close()
+	for column, found := range exchangeColumns {
+		if !found {
+			t.Fatalf("migration did not add user_exchange_keys.%s", column)
+		}
 	}
 }
 

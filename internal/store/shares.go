@@ -53,9 +53,21 @@ func (s *Store) SigningKey(ctx context.Context, userID, keyID string) (SigningKe
 func (s *Store) RegisterExchangeKey(ctx context.Context, key ExchangeKey) (ExchangeKey, error) {
 	var existing ExchangeKey
 	var createdMS int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, user_id, public_jwk, fingerprint, created_at FROM user_exchange_keys WHERE user_id = ? AND fingerprint = ?`, key.UserID, key.Fingerprint).
-		Scan(&existing.ID, &existing.UserID, &existing.PublicJWK, &existing.Fingerprint, &createdMS)
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, user_id, public_jwk, fingerprint, signing_key_id, binding_version, binding_signature, created_at
+FROM user_exchange_keys WHERE user_id = ? AND fingerprint = ?`, key.UserID, key.Fingerprint).
+		Scan(&existing.ID, &existing.UserID, &existing.PublicJWK, &existing.Fingerprint, &existing.SigningKeyID,
+			&existing.BindingVersion, &existing.BindingSignature, &createdMS)
 	if err == nil {
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE user_exchange_keys SET public_jwk = ?, signing_key_id = ?, binding_version = ?, binding_signature = ?
+WHERE id = ? AND user_id = ?`, key.PublicJWK, key.SigningKeyID, key.BindingVersion, key.BindingSignature, existing.ID, key.UserID); err != nil {
+			return ExchangeKey{}, err
+		}
+		existing.PublicJWK = key.PublicJWK
+		existing.SigningKeyID = key.SigningKeyID
+		existing.BindingVersion = key.BindingVersion
+		existing.BindingSignature = key.BindingSignature
 		existing.CreatedAt = time.UnixMilli(createdMS).UTC()
 		return existing, nil
 	}
@@ -63,10 +75,11 @@ func (s *Store) RegisterExchangeKey(ctx context.Context, key ExchangeKey) (Excha
 		return ExchangeKey{}, err
 	}
 	result, err := s.db.ExecContext(ctx, `
-INSERT INTO user_exchange_keys (id, user_id, public_jwk, fingerprint, created_at)
-SELECT ?, ?, ?, ?, ?
-WHERE (SELECT COUNT(*) FROM user_exchange_keys WHERE user_id = ?) < 32`,
-		key.ID, key.UserID, key.PublicJWK, key.Fingerprint, key.CreatedAt.UTC().UnixMilli(), key.UserID)
+INSERT INTO user_exchange_keys (id, user_id, public_jwk, fingerprint, signing_key_id, binding_version, binding_signature, created_at)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?
+WHERE (SELECT COUNT(*) FROM user_exchange_keys WHERE user_id = ? AND binding_version = 1) < 32`,
+		key.ID, key.UserID, key.PublicJWK, key.Fingerprint, key.SigningKeyID, key.BindingVersion, key.BindingSignature,
+		key.CreatedAt.UTC().UnixMilli(), key.UserID)
 	if err != nil {
 		return ExchangeKey{}, err
 	}
@@ -79,7 +92,13 @@ WHERE (SELECT COUNT(*) FROM user_exchange_keys WHERE user_id = ?) < 32`,
 }
 
 func (s *Store) ExchangeKeys(ctx context.Context, userID string) ([]ExchangeKey, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, public_jwk, fingerprint, created_at FROM user_exchange_keys WHERE user_id = ? ORDER BY created_at DESC LIMIT 32`, userID)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT x.id, x.user_id, x.public_jwk, x.fingerprint, x.signing_key_id, x.binding_version, x.binding_signature,
+       k.public_jwk, k.fingerprint, x.created_at
+FROM user_exchange_keys x
+JOIN user_keys k ON k.id = x.signing_key_id AND k.user_id = x.user_id AND k.algorithm = 'Ed25519'
+WHERE x.user_id = ? AND x.binding_version = 1 AND x.binding_signature <> ''
+ORDER BY x.created_at DESC LIMIT 32`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +107,8 @@ func (s *Store) ExchangeKeys(ctx context.Context, userID string) ([]ExchangeKey,
 	for rows.Next() {
 		var key ExchangeKey
 		var createdMS int64
-		if err := rows.Scan(&key.ID, &key.UserID, &key.PublicJWK, &key.Fingerprint, &createdMS); err != nil {
+		if err := rows.Scan(&key.ID, &key.UserID, &key.PublicJWK, &key.Fingerprint, &key.SigningKeyID,
+			&key.BindingVersion, &key.BindingSignature, &key.SigningPublicJWK, &key.SigningFingerprint, &createdMS); err != nil {
 			return nil, err
 		}
 		key.CreatedAt = time.UnixMilli(createdMS).UTC()
@@ -103,7 +123,9 @@ func (s *Store) ShareRecipients(ctx context.Context, excludeUserID string, limit
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT u.id, u.username, u.display_name, u.avatar_url, u.total_flights, u.last_flight_at, COUNT(k.id)
-FROM users u JOIN user_exchange_keys k ON k.user_id = u.id
+FROM users u
+JOIN user_exchange_keys k ON k.user_id = u.id AND k.binding_version = 1 AND k.binding_signature <> ''
+JOIN user_keys sk ON sk.id = k.signing_key_id AND sk.user_id = k.user_id AND sk.algorithm = 'Ed25519'
 WHERE u.id <> ?
 GROUP BY u.id
 ORDER BY u.display_name COLLATE NOCASE, u.id

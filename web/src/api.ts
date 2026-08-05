@@ -37,8 +37,8 @@ export const api = {
   registerKey: (publicJwk: OKPPublicJWK) => request<{ keyId: string; fingerprint: string; algorithm: 'Ed25519' }>('/api/keys', {
     method: 'POST', body: JSON.stringify({ publicJwk }),
   }),
-  registerExchangeKey: (publicJwk: OKPPublicJWK) => request<{ keyId: string; fingerprint: string; algorithm: 'X25519' }>('/api/exchange-keys', {
-    method: 'POST', body: JSON.stringify({ publicJwk }),
+  registerExchangeKey: (publicJwk: OKPPublicJWK, signingKeyId: string, bindingSignature: string) => request<{ keyId: string; fingerprint: string; algorithm: 'X25519' }>('/api/exchange-keys', {
+    method: 'POST', body: JSON.stringify({ publicJwk, signingKeyId, bindingVersion: 1, bindingSignature }),
   }),
   shareRecipients: () => request<{ recipients: ShareRecipient[] }>('/api/share-recipients'),
   recipientKeys: (userId: string) => request<{ keys: ExchangeKey[] }>(`/api/share-recipients/${encodeURIComponent(userId)}/keys`),

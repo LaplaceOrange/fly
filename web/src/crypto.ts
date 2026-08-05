@@ -49,8 +49,23 @@ export function modernShareSigningInput(input: Pick<ShareCreateRequest,
     String(envelopes.length),
     ...envelopes.flatMap((envelope) => [envelope.keyId, envelope.salt, envelope.iv, envelope.wrappedKey]),
   ]
-  const encoder = new TextEncoder()
-  return `share-sign-v2\n${fields.map((field) => `${encoder.encode(field).byteLength}:${field}\n`).join('')}`
+  return lengthPrefixedInput('share-sign-v2', fields)
+}
+
+export function exchangeKeyBindingInput(userId: string, signingKeyId: string, exchangePublicJwk: OKPPublicJWK) {
+  return lengthPrefixedInput('exchange-key-binding-v1', [userId, signingKeyId, 'Ed25519', 'X25519', exchangePublicJwk.x])
+}
+
+export async function verifyExchangeKeyBindings(recipientUserId: string, keys: ExchangeKey[]) {
+  const results = await Promise.all(keys.map((key) => verifyExchangeKeyBinding(recipientUserId, key)))
+  if (results.some((valid) => !valid)) throw new Error('接收者 X25519 公钥的 Ed25519 绑定签名无效')
+  return keys
+}
+
+export async function okpPublicKeyFingerprint(publicJwk: OKPPublicJWK) {
+  const canonical = JSON.stringify({ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x })
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+  return toBase64URL(new Uint8Array(digest))
 }
 
 export function ensureModernDeviceKeys(userId: string) {
@@ -70,7 +85,7 @@ export async function createSignedShare(
   let unsigned: Omit<ShareCreateRequest, 'signature' | 'keyId'>
 
   if (options.encrypted) {
-    const encrypted = await encryptForRecipients(plaintext, options.recipientKeys)
+    const encrypted = await encryptForRecipients(plaintext, options.recipientUserId, options.recipientKeys)
     unsigned = {
       encrypted: true,
       payload: encrypted.payload,
@@ -105,8 +120,9 @@ export async function createSignedShare(
   }
 }
 
-export async function encryptForRecipients(plaintext: string, recipientKeys: ExchangeKey[]) {
+export async function encryptForRecipients(plaintext: string, recipientUserId: string, recipientKeys: ExchangeKey[]) {
   if (!recipientKeys.length) throw new Error('接收者没有可用的 X25519 设备密钥')
+  await verifyExchangeKeyBindings(recipientUserId, recipientKeys)
   const contentKeyBytes = crypto.getRandomValues(new Uint8Array(32))
   try {
     const contentIV = crypto.getRandomValues(new Uint8Array(12))
@@ -243,33 +259,62 @@ async function ensureModernDeviceKeysInner(userId: string): Promise<ModernDevice
   const existing = await idbGet(userId) ?? { userId }
   let next = existing
 
-  if (!next.signingKeyId || !next.signingPrivateKey || !next.signingPublicJwk) {
+  if (!next.signingPrivateKey || !next.signingPublicJwk) {
     const generated = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']) as CryptoKeyPair
     const publicJwk = await crypto.subtle.exportKey('jwk', generated.publicKey) as OKPPublicJWK
-    const registered = await api.registerKey(publicJwk)
     next = {
       ...next,
-      signingKeyId: registered.keyId,
-      signingFingerprint: registered.fingerprint,
+      signingKeyId: undefined,
+      signingFingerprint: undefined,
       signingPublicJwk: publicJwk,
       signingPrivateKey: generated.privateKey,
     }
     await idbPut(next)
   }
 
-  if (!next.exchangeKeyId || !next.exchangePrivateKey || !next.exchangePublicJwk) {
+  const signingRegistered = await api.registerKey(next.signingPublicJwk!)
+  if (signingRegistered.fingerprint !== await okpPublicKeyFingerprint(next.signingPublicJwk!)) {
+    throw new Error('服务器返回的 Ed25519 公钥指纹不一致')
+  }
+  next = {
+    ...next,
+    signingKeyId: signingRegistered.keyId,
+    signingFingerprint: signingRegistered.fingerprint,
+  }
+  await idbPut(next)
+
+  if (!next.exchangePrivateKey || !next.exchangePublicJwk) {
     const generated = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']) as CryptoKeyPair
     const publicJwk = await crypto.subtle.exportKey('jwk', generated.publicKey) as OKPPublicJWK
-    const registered = await api.registerExchangeKey(publicJwk)
     next = {
       ...next,
-      exchangeKeyId: registered.keyId,
-      exchangeFingerprint: registered.fingerprint,
+      exchangeKeyId: undefined,
+      exchangeFingerprint: undefined,
       exchangePublicJwk: publicJwk,
       exchangePrivateKey: generated.privateKey,
     }
     await idbPut(next)
   }
+
+  const bindingSignature = await crypto.subtle.sign(
+    { name: 'Ed25519' },
+    next.signingPrivateKey!,
+    new TextEncoder().encode(exchangeKeyBindingInput(userId, next.signingKeyId!, next.exchangePublicJwk!)),
+  )
+  const registered = await api.registerExchangeKey(
+    next.exchangePublicJwk!,
+    next.signingKeyId!,
+    toBase64URL(new Uint8Array(bindingSignature)),
+  )
+  if (registered.fingerprint !== await okpPublicKeyFingerprint(next.exchangePublicJwk!)) {
+    throw new Error('服务器返回的 X25519 公钥指纹不一致')
+  }
+  next = {
+    ...next,
+    exchangeKeyId: registered.keyId,
+    exchangeFingerprint: registered.fingerprint,
+  }
+  await idbPut(next)
 
   return {
     signingKeyId: next.signingKeyId!,
@@ -277,6 +322,32 @@ async function ensureModernDeviceKeysInner(userId: string): Promise<ModernDevice
     exchangeKeyId: next.exchangeKeyId!,
     exchangePrivateKey: next.exchangePrivateKey!,
   }
+}
+
+async function verifyExchangeKeyBinding(recipientUserId: string, key: ExchangeKey) {
+  try {
+    if (key.bindingVersion !== 1 || key.publicJwk.kty !== 'OKP' || key.publicJwk.crv !== 'X25519') return false
+    if (key.signingPublicJwk.kty !== 'OKP' || key.signingPublicJwk.crv !== 'Ed25519') return false
+    const [exchangeFingerprint, signingFingerprint] = await Promise.all([
+      okpPublicKeyFingerprint(key.publicJwk),
+      okpPublicKeyFingerprint(key.signingPublicJwk),
+    ])
+    if (exchangeFingerprint !== key.fingerprint || signingFingerprint !== key.signingFingerprint) return false
+    const signingPublicKey = await crypto.subtle.importKey('jwk', key.signingPublicJwk, { name: 'Ed25519' }, false, ['verify'])
+    return crypto.subtle.verify(
+      { name: 'Ed25519' },
+      signingPublicKey,
+      fromBase64URL(key.bindingSignature),
+      new TextEncoder().encode(exchangeKeyBindingInput(recipientUserId, key.signingKeyId, key.publicJwk)),
+    )
+  } catch {
+    return false
+  }
+}
+
+function lengthPrefixedInput(header: string, fields: string[]) {
+  const encoder = new TextEncoder()
+  return `${header}\n${fields.map((field) => `${encoder.encode(field).byteLength}:${field}\n`).join('')}`
 }
 
 function openDatabase(): Promise<IDBDatabase> {

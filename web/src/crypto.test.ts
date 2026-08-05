@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { decryptWithExchangePrivateKey, encryptForRecipients, legacyShareSigningInput, modernShareSigningInput } from './crypto'
+import { decryptWithExchangePrivateKey, encryptForRecipients, exchangeKeyBindingInput, legacyShareSigningInput, modernShareSigningInput, okpPublicKeyFingerprint, verifyExchangeKeyBindings } from './crypto'
 import type { OKPPublicJWK } from './types'
 
 describe('share cryptography', () => {
-  it('keeps legacy signatures verifiable and canonicalizes v2 envelopes', () => {
+  it('keeps legacy signatures verifiable and canonicalizes v2 envelopes', async () => {
     expect(legacyShareSigningInput(true, 'ciphertext', 'iv')).toBe('share-sign-v1\n1\nciphertext\niv')
     expect(modernShareSigningInput({
       encrypted: false, payload: '起飞', iv: '', cryptoSuite: 'Ed25519', recipientUserId: '', keyEnvelopes: [],
     })).toBe('share-sign-v2\n7:Ed25519\n5:false\n6:起飞\n0:\n0:\n0:\n1:0\n')
+    expect(exchangeKeyBindingInput('用户', 'sig', { kty: 'OKP', crv: 'X25519', x: 'x' }))
+      .toBe('exchange-key-binding-v1\n6:用户\n3:sig\n7:Ed25519\n6:X25519\n1:x\n')
+    await expect(okpPublicKeyFingerprint({ kty: 'OKP', crv: 'X25519', x: 'x' }))
+      .resolves.toBe('WrTGFJjPeIHHytZ5ehJyyCmZdmf6dEMtnhnHFKhqMYU')
     const input = modernShareSigningInput({
       encrypted: true,
       payload: 'ciphertext',
@@ -28,9 +32,21 @@ describe('share cryptography', () => {
   it('round-trips a content key through X25519, HKDF and AES-GCM', async () => {
     const recipient = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']) as CryptoKeyPair
     const publicJwk = await crypto.subtle.exportKey('jwk', recipient.publicKey) as OKPPublicJWK
-    const encrypted = await encryptForRecipients('真正的端到端加密', [{
-      keyId: 'recipient-device', publicJwk, fingerprint: 'fingerprint',
-    }])
+    const signing = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']) as CryptoKeyPair
+    const signingPublicJwk = await crypto.subtle.exportKey('jwk', signing.publicKey) as OKPPublicJWK
+    const signingKeyId = 'recipient-signing-device'
+    const bindingSignature = await crypto.subtle.sign(
+      { name: 'Ed25519' }, signing.privateKey,
+      new TextEncoder().encode(exchangeKeyBindingInput('recipient', signingKeyId, publicJwk)),
+    )
+    const boundKey = {
+      keyId: 'recipient-device', publicJwk, fingerprint: await okpPublicKeyFingerprint(publicJwk), signingKeyId,
+      bindingVersion: 1 as const, bindingSignature: toBase64URL(new Uint8Array(bindingSignature)),
+      signingPublicJwk, signingFingerprint: await okpPublicKeyFingerprint(signingPublicJwk),
+    }
+    await expect(verifyExchangeKeyBindings('wrong-recipient', [boundKey])).rejects.toThrow('绑定签名无效')
+    await expect(verifyExchangeKeyBindings('recipient', [{ ...boundKey, fingerprint: 'tampered' }])).rejects.toThrow('绑定签名无效')
+    const encrypted = await encryptForRecipients('真正的端到端加密', 'recipient', [boundKey])
     const plaintext = await decryptWithExchangePrivateKey(recipient.privateKey, 'recipient-device', {
       encrypted: true,
       signatureVersion: 2,
@@ -42,3 +58,9 @@ describe('share cryptography', () => {
     expect(plaintext).toBe('真正的端到端加密')
   })
 })
+
+function toBase64URL(bytes: Uint8Array) {
+  let binary = ''
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}

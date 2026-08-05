@@ -38,4 +38,18 @@ describe('share API', () => {
     })
     expect(request.body).not.toContain('must-stay-in-the-url-fragment')
   })
+
+  it('sends the Ed25519 binding proof with an X25519 registration', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      keyId: 'exchange-key', fingerprint: 'fingerprint', algorithm: 'X25519',
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+
+    await api.registerExchangeKey({ kty: 'OKP', crv: 'X25519', x: 'exchange-x' }, 'signing-key', 'binding-signature')
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit
+    expect(JSON.parse(request.body as string)).toEqual({
+      publicJwk: { kty: 'OKP', crv: 'X25519', x: 'exchange-x' },
+      signingKeyId: 'signing-key', bindingVersion: 1, bindingSignature: 'binding-signature',
+    })
+  })
 })

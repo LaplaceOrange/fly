@@ -84,11 +84,16 @@ type SigningKey struct {
 }
 
 type ExchangeKey struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"-"`
-	PublicJWK   string    `json:"publicJwk"`
-	Fingerprint string    `json:"fingerprint"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID                 string    `json:"id"`
+	UserID             string    `json:"-"`
+	PublicJWK          string    `json:"publicJwk"`
+	Fingerprint        string    `json:"fingerprint"`
+	SigningKeyID       string    `json:"signingKeyId"`
+	BindingVersion     int       `json:"bindingVersion"`
+	BindingSignature   string    `json:"bindingSignature"`
+	SigningPublicJWK   string    `json:"signingPublicJwk,omitempty"`
+	SigningFingerprint string    `json:"signingFingerprint,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 type ShareRecipient struct {

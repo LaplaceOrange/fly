@@ -233,19 +233,70 @@ func TestEncryptedShareRequiresIntendedRecipient(t *testing.T) {
 	if err := json.NewDecoder(signingResponse.Body).Decode(&signingRegistered); err != nil {
 		t.Fatal(err)
 	}
+	recipientSigningPublic, recipientSigningPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientSigningResponse := authenticatedJSON(t, testServer.URL+"/api/keys", "recipient-session", map[string]any{"publicJwk": okpPublicJWK{
+		Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(recipientSigningPublic),
+	}})
+	defer recipientSigningResponse.Body.Close()
+	var recipientSigningRegistered struct {
+		KeyID string `json:"keyId"`
+	}
+	if err := json.NewDecoder(recipientSigningResponse.Body).Decode(&recipientSigningRegistered); err != nil {
+		t.Fatal(err)
+	}
 	recipientPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	exchangeResponse := authenticatedJSON(t, testServer.URL+"/api/exchange-keys", "recipient-session", map[string]any{"publicJwk": okpPublicJWK{
-		Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(recipientPrivate.PublicKey().Bytes()),
-	}})
+	exchangeJWK := okpPublicJWK{Kty: "OKP", Crv: "X25519", X: base64.RawURLEncoding.EncodeToString(recipientPrivate.PublicKey().Bytes())}
+	invalidBindingResponse := authenticatedJSON(t, testServer.URL+"/api/exchange-keys", "recipient-session", map[string]any{
+		"publicJwk": exchangeJWK, "signingKeyId": recipientSigningRegistered.KeyID, "bindingVersion": 1,
+		"bindingSignature": base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+	})
+	invalidBindingResponse.Body.Close()
+	if invalidBindingResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid exchange binding returned %d", invalidBindingResponse.StatusCode)
+	}
+	bindingSignature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(recipientSigningPrivate,
+		[]byte(exchangeKeyBindingInput(recipient.ID, recipientSigningRegistered.KeyID, exchangeJWK))))
+	exchangeResponse := authenticatedJSON(t, testServer.URL+"/api/exchange-keys", "recipient-session", map[string]any{
+		"publicJwk": exchangeJWK, "signingKeyId": recipientSigningRegistered.KeyID,
+		"bindingVersion": 1, "bindingSignature": bindingSignature,
+	})
 	defer exchangeResponse.Body.Close()
+	if exchangeResponse.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(exchangeResponse.Body)
+		t.Fatalf("exchange key registration returned %d: %s", exchangeResponse.StatusCode, body)
+	}
 	var exchangeRegistered struct {
 		KeyID string `json:"keyId"`
 	}
 	if err := json.NewDecoder(exchangeResponse.Body).Decode(&exchangeRegistered); err != nil {
 		t.Fatal(err)
+	}
+	directoryResponse := authenticatedGet(t, testServer.URL+"/api/share-recipients/"+recipient.ID+"/keys", "sender-session")
+	defer directoryResponse.Body.Close()
+	var directory struct {
+		Keys []struct {
+			KeyID              string       `json:"keyId"`
+			SigningKeyID       string       `json:"signingKeyId"`
+			BindingVersion     int          `json:"bindingVersion"`
+			BindingSignature   string       `json:"bindingSignature"`
+			SigningPublicJWK   okpPublicJWK `json:"signingPublicJwk"`
+			SigningFingerprint string       `json:"signingFingerprint"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(directoryResponse.Body).Decode(&directory); err != nil {
+		t.Fatal(err)
+	}
+	if directoryResponse.StatusCode != http.StatusOK || len(directory.Keys) != 1 || directory.Keys[0].KeyID != exchangeRegistered.KeyID ||
+		directory.Keys[0].SigningKeyID != recipientSigningRegistered.KeyID || directory.Keys[0].BindingVersion != 1 ||
+		directory.Keys[0].BindingSignature != bindingSignature || directory.Keys[0].SigningPublicJWK.X != base64.RawURLEncoding.EncodeToString(recipientSigningPublic) ||
+		directory.Keys[0].SigningFingerprint == "" {
+		t.Fatalf("unexpected exchange key directory response: status=%d body=%+v", directoryResponse.StatusCode, directory)
 	}
 	ephemeralPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {

@@ -23,6 +23,7 @@ const (
 	ed25519Algorithm     = "Ed25519"
 	publicCryptoSuite    = "Ed25519"
 	encryptedCryptoSuite = "X25519-HKDF-SHA256-AES-256-GCM+Ed25519"
+	exchangeBindingV1    = 1
 )
 
 type okpPublicJWK struct {
@@ -103,7 +104,10 @@ func (s *Server) registerExchangeKey(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var request struct {
-		PublicJWK okpPublicJWK `json:"publicJwk"`
+		PublicJWK        okpPublicJWK `json:"publicJwk"`
+		SigningKeyID     string       `json:"signingKeyId"`
+		BindingVersion   int          `json:"bindingVersion"`
+		BindingSignature string       `json:"bindingSignature"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -120,6 +124,33 @@ func (s *Server) registerExchangeKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_exchange_key", "X25519 公钥无效", 0)
 		return
 	}
+	if request.BindingVersion != exchangeBindingV1 || request.SigningKeyID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_exchange_binding", "X25519 公钥必须携带 Ed25519 v1 绑定签名", 0)
+		return
+	}
+	signingKey, err := s.store.SigningKey(r.Context(), user.ID, request.SigningKeyID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "unknown_signing_key", "绑定签名使用的 Ed25519 公钥不存在", 0)
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
+	if signingKey.Algorithm != ed25519Algorithm {
+		writeError(w, http.StatusBadRequest, "wrong_binding_algorithm", "X25519 公钥绑定必须使用 Ed25519 签名", 0)
+		return
+	}
+	var signingJWK okpPublicJWK
+	if err := json.Unmarshal([]byte(signingKey.PublicJWK), &signingJWK); err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	signingPublicKey, err := parseOKPPublicKey(signingJWK, "Ed25519")
+	if err != nil || !verifyExchangeKeyBindingSignature(ed25519.PublicKey(signingPublicKey), user.ID, request.SigningKeyID, request.PublicJWK, request.BindingSignature) {
+		writeError(w, http.StatusBadRequest, "exchange_binding_invalid", "X25519 公钥的 Ed25519 绑定签名验证失败", 0)
+		return
+	}
 	canonical, fingerprint := canonicalOKPKey(request.PublicJWK)
 	keyID, err := randomToken(12)
 	if err != nil {
@@ -127,7 +158,9 @@ func (s *Server) registerExchangeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key, err := s.store.RegisterExchangeKey(r.Context(), store.ExchangeKey{
-		ID: keyID, UserID: user.ID, PublicJWK: canonical, Fingerprint: fingerprint, CreatedAt: time.Now(),
+		ID: keyID, UserID: user.ID, PublicJWK: canonical, Fingerprint: fingerprint,
+		SigningKeyID: request.SigningKeyID, BindingVersion: request.BindingVersion,
+		BindingSignature: request.BindingSignature, CreatedAt: time.Now(),
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrDeviceKeyLimit) {
@@ -176,12 +209,21 @@ func (s *Server) recipientExchangeKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]map[string]any, 0, len(keys))
 	for _, key := range keys {
-		var jwk any
-		if err := json.Unmarshal([]byte(key.PublicJWK), &jwk); err != nil {
+		var exchangeJWK, signingJWK any
+		if err := json.Unmarshal([]byte(key.PublicJWK), &exchangeJWK); err != nil {
 			s.internalError(w, r, err)
 			return
 		}
-		result = append(result, map[string]any{"keyId": key.ID, "publicJwk": jwk, "fingerprint": key.Fingerprint})
+		if err := json.Unmarshal([]byte(key.SigningPublicJWK), &signingJWK); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		result = append(result, map[string]any{
+			"keyId": key.ID, "publicJwk": exchangeJWK, "fingerprint": key.Fingerprint,
+			"signingKeyId": key.SigningKeyID, "bindingVersion": key.BindingVersion,
+			"bindingSignature": key.BindingSignature, "signingPublicJwk": signingJWK,
+			"signingFingerprint": key.SigningFingerprint,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": result})
 }
@@ -418,6 +460,18 @@ func verifyModernShareSignature(publicKey ed25519.PublicKey, request shareReques
 	return ed25519.Verify(publicKey, []byte(modernShareSigningInput(request)), signature)
 }
 
+func verifyExchangeKeyBindingSignature(publicKey ed25519.PublicKey, userID, signingKeyID string, exchangeJWK okpPublicJWK, signatureValue string) bool {
+	signature, err := base64.RawURLEncoding.DecodeString(signatureValue)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(publicKey, []byte(exchangeKeyBindingInput(userID, signingKeyID, exchangeJWK)), signature)
+}
+
+func exchangeKeyBindingInput(userID, signingKeyID string, exchangeJWK okpPublicJWK) string {
+	return lengthPrefixedInput("exchange-key-binding-v1", []string{userID, signingKeyID, ed25519Algorithm, "X25519", exchangeJWK.X})
+}
+
 func modernShareSigningInput(request shareRequest) string {
 	envelopes := append([]keyEnvelope(nil), request.KeyEnvelopes...)
 	sort.Slice(envelopes, func(i, j int) bool { return envelopes[i].KeyID < envelopes[j].KeyID })
@@ -433,8 +487,13 @@ func modernShareSigningInput(request shareRequest) string {
 	for _, envelope := range envelopes {
 		fields = append(fields, envelope.KeyID, envelope.Salt, envelope.IV, envelope.WrappedKey)
 	}
+	return lengthPrefixedInput("share-sign-v2", fields)
+}
+
+func lengthPrefixedInput(header string, fields []string) string {
 	var builder strings.Builder
-	builder.WriteString("share-sign-v2\n")
+	builder.WriteString(header)
+	builder.WriteByte('\n')
 	for _, field := range fields {
 		builder.WriteString(strconv.Itoa(len(field)))
 		builder.WriteByte(':')

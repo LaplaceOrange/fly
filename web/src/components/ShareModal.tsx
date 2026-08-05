@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { createSignedShare } from '../crypto'
+import { createSignedShare, verifyExchangeKeyBindings } from '../crypto'
 import { api } from '../api'
 import type { Dashboard, ExchangeKey, RangeName, SharePayload, ShareRecipient, User } from '../types'
 
@@ -44,7 +44,8 @@ export function ShareModal({ user, dashboard, range, ttlHours, onClose }: {
     setRecipientKeys([])
     setRecipientKeysLoading(true)
     api.recipientKeys(recipientUserId)
-      .then(({ keys }) => active && setRecipientKeys(keys))
+      .then(({ keys }) => verifyExchangeKeyBindings(recipientUserId, keys))
+      .then((keys) => active && setRecipientKeys(keys))
       .catch((caught) => active && setError(caught instanceof Error ? caught.message : '无法读取接收者设备公钥'))
       .finally(() => active && setRecipientKeysLoading(false))
     return () => { active = false }
@@ -122,9 +123,9 @@ export function ShareModal({ user, dashboard, range, ttlHours, onClose }: {
               {recipients.map((recipient) => <option key={recipient.id} value={recipient.id}>{recipient.displayName} (@{recipient.username}) · {recipient.deviceCount} 台设备</option>)}
             </select>
             <span className="key-fingerprints">
-              <strong>参与交换的设备公钥指纹</strong>
-              {recipientKeysLoading && <small>正在验证接收者公钥…</small>}
-              {!recipientKeysLoading && recipientKeys.map((key, index) => <small key={key.keyId} title={key.fingerprint}>设备 {index + 1} · {key.fingerprint.slice(0, 18)}…</small>)}
+              <strong>已验证 Ed25519 绑定的设备公钥</strong>
+              {recipientKeysLoading && <small>正在验证 X25519 公钥绑定签名…</small>}
+              {!recipientKeysLoading && recipientKeys.map((key, index) => <small key={key.keyId} title={`X25519 ${key.fingerprint}\nEd25519 ${key.signingFingerprint}`}>设备 {index + 1} · X {key.fingerprint.slice(0, 12)}… · Ed {key.signingFingerprint.slice(0, 12)}…</small>)}
             </span>
           </label>}
           <div className="crypto-note"><span>✓</span> 每份分享由本设备 Ed25519 私钥签名；服务器无法获得 AES 内容密钥。</div>
