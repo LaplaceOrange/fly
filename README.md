@@ -180,3 +180,7 @@ sqlite3 /var/lib/chinese-can-fly/fly.db ".backup '/path/to/backup/fly-$(date +%F
 ```
 
 不要只复制主 `.db` 文件而忽略正在使用的 WAL。恢复前先停止服务，并同时保留一份原数据库副本。
+
+## 开源许可证
+
+本项目采用 [Apache License 2.0](./LICENSE)，版权所有 © 2026 FSY / LaplaceOrange。
